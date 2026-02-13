@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Lab Pouring System</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <style>
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .header-title { color: #003468; font-weight: 800; letter-spacing: -1px; }
+        
+        /* 카드 스타일 */
+        .card { border: none; border-radius: 15px; box-shadow: 0 10px 20px rgba(0,0,0,0.05); transition: 0.3s; }
+        .card:hover { transform: translateY(-5px); }
+        .card-header { background: white; border-bottom: 2px solid #f1f1f1; font-weight: bold; border-radius: 15px 15px 0 0 !important; padding: 15px; }
+        
+        /* 실시간 무게 디스플레이 */
+        .weight-display { font-size: 4rem; font-weight: bold; color: #2196f3; font-family: 'Courier New', monospace; }
+        .unit { font-size: 1.5rem; color: #777; }
+        
+        /* 긴급 정지 버튼 (가장 눈에 띄게) */
+        .btn-estop { 
+            width: 100%; height: 80px; font-size: 1.8rem; font-weight: bold; 
+            background-color: #dc3545; color: white; border-radius: 10px; 
+            animation: pulse 2s infinite; border: 3px solid #b02a37;
+        }
+        .btn-estop:hover { background-color: #bb2d3b; color: white; }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(220, 53, 69, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+        }
+
+        /* 상태 아이콘 */
+        .status-badge { font-size: 1.2rem; padding: 10px 20px; border-radius: 50px; }
+    </style>
+</head>
+<body>
+
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="header-title"><i class="fas fa-flask"></i> Smart Lab Pouring System</h2>
+            <p class="text-muted mb-0">Doosan M0609 & Load Cell Feedback Control</p>
+        </div>
+        <div id="connection-status" class="badge bg-secondary">System Offline</div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-header"><i class="fas fa-sliders-h"></i> 실험 파라미터 설정</div>
+                <div class="card-body">
+                    <label class="form-label fw-bold">1. 재료 종류 (Material)</label>
+                    <div class="btn-group w-100 mb-3" role="group">
+                        <input type="radio" class="btn-check" name="material" id="mat_liquid" autocomplete="off" checked>
+                        <label class="btn btn-outline-primary" for="mat_liquid"><i class="fas fa-tint"></i> 액체 (Water)</label>
+
+                        <input type="radio" class="btn-check" name="material" id="mat_solid" autocomplete="off">
+                        <label class="btn btn-outline-warning" for="mat_solid"><i class="fas fa-shapes"></i> 고체 (Solid)</label>
+                    </div>
+
+                    <label class="form-label fw-bold">2. 목표 무게 (Target Weight)</label>
+                    <div class="input-group mb-3">
+                        <input type="number" id="target_weight" class="form-control form-control-lg" value="200" step="10">
+                        <span class="input-group-text">g</span>
+                    </div>
+
+                    <label class="form-label fw-bold">3. 붓기 속도 (Speed)</label>
+                    <input type="range" class="form-range" id="speed_slider" min="1" max="100" value="50">
+                    <div class="d-flex justify-content-between text-muted small">
+                        <span>Slow</span>
+                        <span id="speed_val">50%</span>
+                        <span>Fast</span>
+                    </div>
+
+                    <hr>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-secondary" onclick="sendTare()"><i class="fas fa-balance-scale"></i> 영점 조절 (Tare)</button>
+                        <button class="btn btn-success btn-lg" onclick="startExperiment()"><i class="fas fa-play"></i> 실험 시작</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-5">
+            <div class="card mb-3 text-center">
+                <div class="card-header"><i class="fas fa-weight-hanging"></i> 실시간 무게 (Load Cell)</div>
+                <div class="card-body">
+                    <div class="weight-display">
+                        <span id="current_weight">0.0</span> <span class="unit">g</span>
+                    </div>
+                    <div class="progress mt-3" style="height: 25px;">
+                        <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-info" 
+                             role="progressbar" style="width: 0%">0%</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><i class="fas fa-robot"></i> 로봇 상태 (Robot Info)</div>
+                <div class="card-body">
+                    <div class="row text-center">
+                        <div class="col-4 border-end">
+                            <small class="text-muted">현재 틸팅 각도</small>
+                            <h4 class="fw-bold mt-1" id="robot_angle">0.0°</h4>
+                        </div>
+                        <div class="col-4 border-end">
+                            <small class="text-muted">현재 속도</small>
+                            <h4 class="fw-bold mt-1" id="robot_speed">0%</h4>
+                        </div>
+                        <div class="col-4">
+                            <small class="text-muted">예측 틸팅값</small>
+                            <h4 class="fw-bold mt-1 text-primary" id="predicted_angle">-</h4>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3">
+            <button class="btn-estop mb-3 shadow" onclick="emergencyStop()">
+                <i class="fas fa-stop-circle"></i> STOP
+            </button>
+
+            <div class="card h-100">
+                <div class="card-header bg-dark text-white"><i class="fas fa-terminal"></i> System Log</div>
+                <div class="card-body bg-light" style="padding: 0;">
+                    <div id="log-box" style="height: 250px; overflow-y: auto; padding: 10px; font-family: monospace; font-size: 0.8rem;">
+                        <span class="text-muted">> System initialized...</span><br>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+<script>
+    // 1. Firebase 설정 (Colab1 프로젝트)
+    const firebaseConfig = {
+        apiKey: "AIzaSyBOVQ2tEPWe_GfIBavzqcw1ppfe2EqiRdE",
+        authDomain: "colab1-78afc.firebaseapp.com",
+        databaseURL: "https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "colab1-78afc",
+        storageBucket: "colab1-78afc.firebasestorage.app",
+        messagingSenderId: "312617327218",
+        appId: "1:312617327218:web:2564e4ed07449d381dc0eb"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
+    // 2. 로그 함수
+    function addLog(msg) {
+        const logBox = document.getElementById('log-box');
+        const time = new Date().toLocaleTimeString('ko-KR', {hour12:false});
+        logBox.innerHTML += `> [${time}] ${msg}<br>`;
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    // 3. UI 인터랙션 (슬라이더 값 표시)
+    document.getElementById('speed_slider').addEventListener('input', function(e) {
+        document.getElementById('speed_val').innerText = e.target.value + "%";
+    });
+
+    // ============================================================
+    // [READ] 데이터 수신 (Arduino & Robot -> UI)
+    // ============================================================
+    
+    // A. 실시간 무게 수신 (Arduino -> Firebase -> UI)
+    database.ref('sensor_data/weight').on('value', (snapshot) => {
+        const weight = parseFloat(snapshot.val() || 0).toFixed(1);
+        const target = parseFloat(document.getElementById('target_weight').value || 1);
+        
+        // 무게 텍스트 업데이트
+        document.getElementById('current_weight').innerText = weight;
+        
+        // 프로그레스 바 업데이트
+        let percent = (weight / target) * 100;
+        if(percent > 100) percent = 100;
+        const bar = document.getElementById('progress-bar');
+        bar.style.width = percent + "%";
+        bar.innerText = Math.round(percent) + "%";
+    });
+
+    // B. 로봇 상태 수신 (Robot -> Firebase -> UI)
+    database.ref('robot_status').on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+            document.getElementById('robot_angle').innerText = (data.current_angle || 0).toFixed(1) + "°";
+            document.getElementById('robot_speed').innerText = (data.velocity || 0) + "%";
+            document.getElementById('predicted_angle').innerText = (data.next_tilt || "-") + "°";
+            
+            // 연결 상태 표시
+            const badge = document.getElementById('connection-status');
+            badge.className = "badge bg-success";
+            badge.innerText = "System Online";
+        }
+    });
+
+    // ============================================================
+    // [WRITE] 명령 전송 (UI -> Firebase -> Robot/Arduino)
+    // ============================================================
+
+    // 1. 실험 시작
+    function startExperiment() {
+        const target = parseFloat(document.getElementById('target_weight').value);
+        const isSolid = document.getElementById('mat_solid').checked;
+        const speed = parseInt(document.getElementById('speed_slider').value);
+        const materialType = isSolid ? "solid" : "liquid";
+
+        if(confirm(`${materialType.toUpperCase()} 모드로 ${target}g 붓기를 시작합니까?`)) {
+            database.ref('commands').set({
+                type: "start_pouring",
+                target_weight: target,
+                material: materialType,
+                initial_speed: speed,
+                timestamp: Date.now()
+            });
+            addLog(`실험 시작: ${target}g (${materialType})`);
+        }
+    }
+
+    // 2. 영점 조절 (Tare)
+    function sendTare() {
+        database.ref('commands').set({
+            type: "tare",
+            timestamp: Date.now()
+        });
+        addLog("명령 전송: 저울 영점 조절");
+        document.getElementById('current_weight').innerText = "0.0";
+    }
+
+    // 3. 긴급 정지 (가장 중요!)
+    function emergencyStop() {
+        database.ref('commands').set({
+            type: "emergency_stop",
+            timestamp: Date.now()
+        });
+        addLog("🚨 긴급 정지 명령 전송됨!");
+        alert("로봇을 긴급 정지시켰습니다.");
+    }
+
+</script>
+
+</body>
+</html>

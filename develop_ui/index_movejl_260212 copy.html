@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doosan M0609 Web Interface</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <style>
+        body { background-color: #f4f6f9; padding-top: 20px; }
+        .card { border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .card-header { font-weight: bold; background-color: white; border-bottom: 2px solid #f0f0f0; }
+        .btn-doosan { background-color: #003468; color: white; } /* 두산 남색 */
+        .btn-doosan:hover { background-color: #002244; color: white; }
+        .status-box { background-color: #e3f2fd; padding: 15px; border-radius: 5px; border: 1px dashed #2196f3; }
+        .log-box { height: 150px; overflow-y: scroll; background: #f8f9fa; border: 1px solid #ddd; padding: 10px; font-size: 0.85em; }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid">
+    <h2 class="text-center mb-4" style="color: #003468; font-weight: bold;">Doosan M0609 Web Interface</h2>
+
+    <div class="row">
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">Joint Control (MoveJ)</div>
+                <div class="card-body">
+                    <div class="row g-2 mb-2">
+                        <div class="col-4"><label>J1 (deg):</label></div>
+                        <div class="col-8"><input type="number" id="j1" class="form-control form-control-sm" value="0.0"></div>
+                        
+                        <div class="col-4"><label>J2 (deg):</label></div>
+                        <div class="col-8"><input type="number" id="j2" class="form-control form-control-sm" value="0.0"></div>
+                        
+                        <div class="col-4"><label>J3 (deg):</label></div>
+                        <div class="col-8"><input type="number" id="j3" class="form-control form-control-sm" value="90.0"></div>
+
+                        <div class="col-4"><label>J4 (deg):</label></div>
+                        <div class="col-8"><input type="number" id="j4" class="form-control form-control-sm" value="0.0"></div>
+
+                        <div class="col-4"><label>J5 (deg):</label></div>
+                        <div class="col-8"><input type="number" id="j5" class="form-control form-control-sm" value="90.0"></div>
+
+                        <div class="col-4"><label>J6 (deg):</label></div>
+                        <div class="col-8"><input type="number" id="j6" class="form-control form-control-sm" value="0.0"></div>
+                    </div>
+                    <hr>
+                    <label>Velocity (0~100%):</label>
+                    <input type="range" id="vel_j" class="form-range" min="1" max="100" value="60">
+                    
+                    <button class="btn btn-primary w-100 mt-3" onclick="sendMoveJ()">MOVE (J)</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">Cartesian Control (MoveL)</div>
+                <div class="card-body">
+                    <div class="row g-2 mb-2">
+                        <div class="col-4"><label>X (mm):</label></div>
+                        <div class="col-8"><input type="number" id="pos_x" class="form-control form-control-sm" value="400.0"></div>
+                        
+                        <div class="col-4"><label>Y (mm):</label></div>
+                        <div class="col-8"><input type="number" id="pos_y" class="form-control form-control-sm" value="0.0"></div>
+                        
+                        <div class="col-4"><label>Z (mm):</label></div>
+                        <div class="col-8"><input type="number" id="pos_z" class="form-control form-control-sm" value="400.0"></div>
+                    </div>
+                    <hr>
+                    <label>Velocity (0~100%):</label>
+                    <input type="range" id="vel_l" class="form-range" min="1" max="100" value="60">
+                    
+                    <button class="btn btn-danger w-100 mt-3" onclick="sendMoveL()">MOVE (L)</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">상태 및 도구</div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-success" onclick="checkStatus()">TCP 확인</button>
+                        <button class="btn btn-doosan" onclick="goHome()">HOME (원위치)</button>
+                        <button class="btn btn-warning" onclick="syncCoords()">현재 좌표 동기화</button>
+                    </div>
+
+                    <div class="status-box mt-3">
+                        <strong>현재 로봇 상태:</strong> <span id="robot-state-text" class="text-primary">대기 중...</span><br>
+                        <strong>완료된 작업 수:</strong> <span id="job-count" class="text-success fw-bold">0</span>
+                    </div>
+
+                    <div class="mt-3">
+                        <label>실시간 로봇 스크립트 로그:</label>
+                        <div id="log-box" class="log-box">
+                            [System] Firebase 연결됨...<br>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+<script>
+    // 1. 사용자분의 Firebase 설정 (그대로 유지)
+    const firebaseConfig = {
+        apiKey: "AIzaSyBOVQ2tEPWe_GfIBavzqcw1ppfe2EqiRdE",
+        authDomain: "rcolab1-78afc.firebaseapp.com",
+        databaseURL: "https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "colab1-78afc",
+        storageBucket: "colab1-78afc.firebasestorage.app",
+        messagingSenderId: "312617327218",
+        appId: "1:312617327218:web:2564e4ed07449d381dc0eb"
+        };
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
+    // 2. 로그 출력 함수
+    function addLog(msg) {
+        const logBox = document.getElementById('log-box');
+        const time = new Date().toLocaleTimeString();
+        logBox.innerHTML += `[${time}] ${msg}<br>`;
+        logBox.scrollTop = logBox.scrollHeight; // 자동 스크롤
+    }
+
+    // 3. [읽기] 완료된 작업 수 모니터링
+    const jobRef = database.ref('robot_status/completed_jobs');
+    jobRef.on('value', (snapshot) => {
+        const count = snapshot.val();
+        document.getElementById('job-count').innerText = count || 0;
+        addLog(`DB 업데이트됨: 작업 수 ${count}`);
+    });
+
+    // 4. [쓰기] MoveJ 명령 전송 함수
+    function sendMoveJ() {
+        const j1 = parseFloat(document.getElementById('j1').value);
+        const j2 = parseFloat(document.getElementById('j2').value);
+        const j3 = parseFloat(document.getElementById('j3').value);
+        const j4 = parseFloat(document.getElementById('j4').value);
+        const j5 = parseFloat(document.getElementById('j5').value);
+        const j6 = parseFloat(document.getElementById('j6').value);
+        const vel = parseInt(document.getElementById('vel_j').value);
+
+        // Firebase의 'commands' 경로에 명령 업로드
+        database.ref('commands').set({
+            type: "movej",
+            target: [j1, j2, j3, j4, j5, j6],
+            velocity: vel,
+            timestamp: Date.now()
+        });
+        addLog(`명령 전송: MoveJ [${j1}, ${j2}...]`);
+    }
+
+    // 5. [쓰기] Home 명령 전송
+    function goHome() {
+        database.ref('commands').set({
+            type: "home",
+            timestamp: Date.now()
+        });
+        addLog("명령 전송: HOME 이동");
+    }
+
+    // 6. [쓰기] 좌표 동기화 요청 (Python에게 현재 좌표 달라고 요청)
+    function syncCoords() {
+        database.ref('commands').set({
+            type: "sync",
+            timestamp: Date.now()
+        });
+        addLog("요청 전송: 좌표 동기화");
+    }
+</script>
+
+</body>
+</html>
