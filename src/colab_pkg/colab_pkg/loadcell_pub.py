@@ -31,10 +31,12 @@ class LoadCellPublisher(Node):
         self.timer = self.create_timer(0.01, self.timer_callback)
 
     def timer_callback(self):
+        #self.get_logger().info(f'{self.ser}, {self.ser.in_waiting}')
         if self.ser and self.ser.in_waiting > 0:
             try:
                 # 1. 시리얼 데이터 한 줄 읽기 (바이트 -> 문자열 디코딩 -> 공백제거)
                 line = self.ser.readline().decode('utf-8').strip()
+                #self.get_logger().info(line)
                 
                 # 2. 데이터가 비어있지 않으면 처리
                 if line:
