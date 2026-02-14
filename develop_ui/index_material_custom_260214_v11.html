@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Lab Pouring System - V10 Complete</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .header-title { color: #003468; font-weight: 800; letter-spacing: -1px; }
+        
+        /* 카드 디자인 */
+        .card { border: none; border-radius: 15px; box-shadow: 0 10px 20px rgba(0,0,0,0.05); transition: 0.3s; }
+        .card:hover { transform: translateY(-5px); }
+        .card-header { background: white; border-bottom: 2px solid #f1f1f1; font-weight: bold; border-radius: 15px 15px 0 0 !important; padding: 15px; }
+        
+        /* 폰트 및 디스플레이 */
+        .weight-display { font-size: 3.5rem; font-weight: bold; color: #2196f3; font-family: 'Courier New', monospace; }
+        .unit { font-size: 1.5rem; color: #777; }
+        .joint-val { font-family: 'Courier New', monospace; font-weight: bold; color: #003468; }
+        
+        /* 비상 정지 버튼 애니메이션 */
+        .btn-estop { 
+            width: 100%; height: 60px; font-size: 1.5rem; font-weight: bold; 
+            background-color: #dc3545; color: white; border-radius: 10px; 
+            animation: pulse 2s infinite; border: 3px solid #b02a37;
+        }
+        .btn-estop:hover { background-color: #bb2d3b; color: white; }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(220, 53, 69, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid px-4 py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="header-title"><i class="fas fa-flask"></i> Smart Lab Pouring System V10</h2>
+            <p class="text-muted mb-0">Doosan M0609 & Load Cell Feedback Control (Real-time)</p>
+        </div>
+        <div id="connection-status" class="badge bg-secondary">System Offline</div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-3">
+            <div class="card h-100">
+                <div class="card-header"><i class="fas fa-sliders-h"></i> 실험 제어 (Control)</div>
+                <div class="card-body">
+                    <label class="form-label fw-bold">1. 재료 (Material)</label>
+                    <div class="btn-group w-100 mb-3" role="group">
+                        <input type="radio" class="btn-check" name="material" id="mat_liquid" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="mat_liquid">액체 (Water)</label>
+                        <input type="radio" class="btn-check" name="material" id="mat_solid" autocomplete="off" checked>
+                        <label class="btn btn-outline-warning" for="mat_solid">고체 (Gravel)</label>
+                    </div>
+
+                    <label class="form-label fw-bold">2. 목표 무게 (Target)</label>
+                    <div class="input-group mb-3">
+                        <input type="number" id="target_weight" class="form-control form-control-lg" value="50" step="10">
+                        <span class="input-group-text">g</span>
+                    </div>
+
+                    <label class="form-label fw-bold">3. 속도 (Speed)</label>
+                    <input type="range" class="form-range" id="speed_slider" min="1" max="100" value="50">
+                    <div class="d-flex justify-content-between text-muted small mb-3">
+                        <span>Slow</span><span id="speed_val">50%</span><span>Fast</span>
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-6"><button class="btn btn-sm btn-outline-primary w-100" onclick="pourMore(1)">+1g</button></div>
+                        <div class="col-6"><button class="btn btn-sm btn-outline-primary w-100" onclick="pourMore(5)">+5g</button></div>
+                        <div class="col-12"><button class="btn btn-sm btn-outline-dark w-100" onclick="retryPouring()"><i class="fas fa-sync"></i> Auto Retry</button></div>
+                    </div>
+
+                    <hr>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-secondary" onclick="sendTare()">영점 (Tare)</button>
+                        <button class="btn btn-success btn-lg" onclick="startExperiment()">실험 시작 (Start)</button>
+                        <button class="btn btn-outline-danger btn-sm" onclick="finishExperiment(true)">강제 분석 종료</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card mb-3 text-center">
+                <div class="card-header"><i class="fas fa-balance-scale"></i> 실시간 무게 (Real-time Weight)</div>
+                <div class="card-body pb-0">
+                    <div class="weight-display">
+                        <span id="current_weight">0.0</span> <span class="unit">g</span>
+                    </div>
+                    <div class="progress mt-2 mb-2" style="height: 20px;">
+                        <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-info" role="progressbar" style="width: 0%">0%</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-chart-line"></i> 분석 대시보드 (Analytics)</span>
+                    <button class="btn btn-sm btn-light py-0" onclick="exportToCSV()">CSV 저장</button>
+                </div>
+                <div class="card-body">
+                    <div class="row text-center mb-3">
+                        <div class="col-4 border-end">
+                            <small class="text-muted">경과 시간</small>
+                            <h5 class="fw-bold" id="elapsed_time">0.0s</h5>
+                        </div>
+                        <div class="col-4 border-end">
+                            <small class="text-muted">목표 오차 (Error)</small>
+                            <h5 class="fw-bold text-success" id="accuracy_val">-</h5>
+                        </div>
+                        <div class="col-4">
+                            <small class="text-muted">안착률 (Pass Rate)</small>
+                            <h5 class="fw-bold text-primary" id="success_rate">0%</h5>
+                        </div>
+                    </div>
+
+                    <div style="height: 250px; width: 100%;">
+                        <canvas id="pouringChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-3">
+            <button class="btn-estop mb-3 shadow" onclick="emergencyStop()">
+                STOP
+            </button>
+
+            <div class="card mb-3">
+                <div class="card-header"><i class="fas fa-robot"></i> Robot Joint Angles</div>
+                <div class="card-body p-0">
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item d-flex justify-content-between"><span>Joint 1:</span> <span id="val_j1" class="joint-val">-</span></li>
+                        <li class="list-group-item d-flex justify-content-between"><span>Joint 2:</span> <span id="val_j2" class="joint-val">-</span></li>
+                        <li class="list-group-item d-flex justify-content-between"><span>Joint 3:</span> <span id="val_j3" class="joint-val">-</span></li>
+                        <li class="list-group-item d-flex justify-content-between"><span>Joint 4:</span> <span id="val_j4" class="joint-val">-</span></li>
+                        <li class="list-group-item d-flex justify-content-between"><span>Joint 5:</span> <span id="val_j5" class="joint-val">-</span></li>
+                        <li class="list-group-item d-flex justify-content-between"><span>Joint 6:</span> <span id="val_j6" class="joint-val">-</span></li>
+                    </ul>
+                    <div class="p-2 text-center bg-light border-top">
+                         <small class="text-muted">Tilt: <span id="robot_angle">0.0</span>° / Vel: <span id="robot_speed">0</span>%</small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card h-100">
+                <div class="card-header bg-secondary text-white"><i class="fas fa-terminal"></i> Log</div>
+                <div class="card-body bg-light p-0">
+                    <div id="log-box" style="height: 150px; overflow-y: auto; padding: 10px; font-family: monospace; font-size: 0.8rem;">
+                        <span class="text-muted">> System ready...</span><br>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+<script>
+    // 1. Firebase 설정
+    const firebaseConfig = {
+        apiKey: "AIzaSyBOVQ2tEPWe_GfIBavzqcw1ppfe2EqiRdE",
+        authDomain: "colab1-78afc.firebaseapp.com",
+        databaseURL: "https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "colab1-78afc",
+        storageBucket: "colab1-78afc.firebasestorage.app",
+        messagingSenderId: "312617327218",
+        appId: "1:312617327218:web:2564e4ed07449d381dc0eb"
+    };
+    if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+    }
+    const database = firebase.database();
+
+    // 2. 전역 변수 설정
+    let isRunning = false;
+    let startTime = 0;
+    let experimentData = []; 
+    let successCount = 0;
+    let totalAttempts = 0;
+    
+    // 차트 설정 (항상 렌더링)
+    const ctx = document.getElementById('pouringChart').getContext('2d');
+    const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Real-time Weight (g)',
+                data: [],
+                borderColor: '#2196f3',
+                backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                borderWidth: 2,
+                tension: 0.3, 
+                fill: true,
+                pointRadius: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false, 
+            scales: {
+                x: { display: false }, 
+                y: { 
+                    beginAtZero: true,
+                    suggestedMax: 100, 
+                    title: { display: true, text: 'Weight (g)' }
+                }
+            }
+        }
+    });
+
+    function addLog(msg) {
+        const logBox = document.getElementById('log-box');
+        const time = new Date().toLocaleTimeString('ko-KR', {hour12:false});
+        if(logBox) {
+            logBox.innerHTML += `> [${time}] ${msg}<br>`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    }
+
+    document.getElementById('speed_slider').addEventListener('input', function(e) {
+        document.getElementById('speed_val').innerText = e.target.value + "%";
+    });
+
+    // ============================================================
+    // [READ] 데이터 수신 (실시간 업데이트)
+    // ============================================================
+    
+    // 1. 무게 데이터 수신
+    database.ref('sensor_data/weight').on('value', (snapshot) => {
+        const weight = parseFloat(snapshot.val() || 0);
+        const target = parseFloat(document.getElementById('target_weight').value || 1);
+        
+        // UI 숫자 업데이트 (항상)
+        document.getElementById('current_weight').innerText = weight.toFixed(1);
+        let percent = (weight / target) * 100;
+        const progressBar = document.getElementById('progress-bar');
+        if(progressBar) {
+            progressBar.style.width = Math.min(percent, 100) + "%";
+            progressBar.innerText = Math.round(percent) + "%";
+        }
+
+        // 그래프 업데이트 (항상)
+        const timeLabel = new Date().toLocaleTimeString(); 
+        if (chart.data.labels.length > 50) { 
+            chart.data.labels.shift();
+            chart.data.datasets[0].data.shift();
+        }
+        chart.data.labels.push(timeLabel);
+        chart.data.datasets[0].data.push(weight);
+        chart.update();
+
+        // 실험 기록 (실험 중일 때만)
+        if (isRunning) {
+            const currentTime = ((Date.now() - startTime) / 1000).toFixed(1);
+            document.getElementById('elapsed_time').innerText = currentTime + "s";
+            experimentData.push({ time: currentTime, weight: weight });
+        }
+    });
+
+    // 2. 로봇 상태 수신
+    database.ref('robot_status').on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+            const statusBadge = document.getElementById('connection-status');
+            if(statusBadge) { statusBadge.className = "badge bg-success"; statusBadge.innerText = "System Online"; }
+
+            // 기본 정보
+            if(document.getElementById('robot_angle')) document.getElementById('robot_angle').innerText = (data.current_angle || 0).toFixed(1);
+            if(document.getElementById('robot_speed')) document.getElementById('robot_speed').innerText = (data.velocity || 0);
+
+            // [중요] 관절 데이터 (V9 복구: 항상 보임)
+            if (data.joint) {
+                document.getElementById('val_j1').innerText = (data.joint.j1 || 0).toFixed(1) + "°";
+                document.getElementById('val_j2').innerText = (data.joint.j2 || 0).toFixed(1) + "°";
+                document.getElementById('val_j3').innerText = (data.joint.j3 || 0).toFixed(1) + "°";
+                document.getElementById('val_j4').innerText = (data.joint.j4 || 0).toFixed(1) + "°";
+                document.getElementById('val_j5').innerText = (data.joint.j5 || 0).toFixed(1) + "°";
+                document.getElementById('val_j6').innerText = (data.joint.j6 || 0).toFixed(1) + "°";
+            }
+        }
+    });
+
+    // 3. 실험 종료 신호 수신
+    database.ref('experiment_state').on('value', (snapshot) => {
+        const state = snapshot.val();
+        if (state === 'finished' && isRunning) {
+            finishExperiment(false); 
+        }
+    });
+
+    // ============================================================
+    // [WRITE] 제어 로직 (V9 기능 전체 복구)
+    // ============================================================
+
+    function startExperiment() {
+        const target = parseFloat(document.getElementById('target_weight').value);
+        const isSolid = document.getElementById('mat_solid').checked;
+        const speed = parseInt(document.getElementById('speed_slider').value);
+        const materialType = isSolid ? "solid" : "liquid";
+
+        if(confirm(`${materialType} 모드 (목표: ${target}g) 시작합니까?`)) {
+            database.ref('commands').set({
+                type: "start_pouring",
+                target_weight: target,
+                material: materialType,
+                initial_speed: speed,
+                timestamp: Date.now()
+            });
+
+            isRunning = true;
+            startTime = Date.now();
+            experimentData = []; // 데이터 리셋
+            document.getElementById('progress-bar').className = "progress-bar progress-bar-striped progress-bar-animated bg-info";
+            
+            // 차트 스케일 조정
+            chart.options.scales.y.suggestedMax = Math.max(100, target * 1.2);
+            chart.update();
+            
+            document.getElementById('accuracy_val').innerText = "측정 중...";
+            database.ref('experiment_state').set('running');
+
+            addLog(`실험 시작: ${target}g`);
+        }
+    }
+
+    function finishExperiment(isManual) {
+        if (!isRunning) return;
+        isRunning = false;
+        document.getElementById('progress-bar').className = "progress-bar bg-success"; // 종료 시 초록색
+
+        const current = parseFloat(document.getElementById('current_weight').innerText);
+        const target = parseFloat(document.getElementById('target_weight').value);
+        
+        const error = current - target;
+        const errorRate = Math.abs(error / target) * 100;
+        
+        const sign = error > 0 ? '+' : '';
+        document.getElementById('accuracy_val').innerText = `${sign}${error.toFixed(1)}g (${errorRate.toFixed(1)}%)`;
+
+        const TOLERANCE = 5.0; 
+        totalAttempts++;
+        
+        if (Math.abs(error) <= TOLERANCE) {
+            successCount++;
+            addLog(`성공! 오차범위 ${TOLERANCE}g 이내 안착`);
+        } else {
+            addLog(`실패.. 오차범위 초과 (${error.toFixed(1)}g)`);
+        }
+
+        const passRate = ((successCount / totalAttempts) * 100).toFixed(0);
+        document.getElementById('success_rate').innerText = `${passRate}% (${successCount}/${totalAttempts}회)`;
+
+        if (isManual) addLog("사용자가 강제로 분석을 종료했습니다.");
+        else addLog("실험이 완료되었습니다.");
+    }
+
+    function sendTare() {
+        database.ref('commands').set({ type: "tare", timestamp: Date.now() });
+        addLog("영점 조절 요청");
+    }
+
+    function emergencyStop() {
+        database.ref('commands').set({ type: "emergency_stop", timestamp: Date.now() });
+        isRunning = false;
+        addLog("🚨 긴급 정지!");
+    }
+
+    function pourMore(amount) {
+        database.ref('commands').set({ type: "pour_more", amount: amount, timestamp: Date.now() });
+        addLog(`${amount}g 추가 붓기`);
+    }
+
+    function retryPouring() {
+        database.ref('commands').set({ type: "retry_fill", timestamp: Date.now() });
+        addLog("자동 재시도 요청");
+    }
+
+    function exportToCSV() {
+        if (experimentData.length === 0) {
+            alert("저장할 데이터가 없습니다.");
+            return;
+        }
+        let csvContent = "data:text/csv;charset=utf-8,Time(s),Weight(g)\r\n";
+        experimentData.forEach(row => {
+            csvContent += `${row.time},${row.weight}\r\n`;
+        });
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `experiment_${Date.now()}.csv`);
+        document.body.appendChild(link);
+        link.click();
+    }
+</script>
+
+</body>
+</html>
