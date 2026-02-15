@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Lab Pouring System - V15 Advanced</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .header-title { color: #003468; font-weight: 800; letter-spacing: -1px; }
+        .card { border: none; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .card-header { background: white; border-bottom: 1px solid #eee; font-weight: bold; padding: 15px; border-radius: 15px 15px 0 0 !important; }
+        
+        .weight-display { font-size: 3rem; font-weight: bold; color: #2196f3; font-family: 'Courier New', monospace; }
+        .flow-display { font-size: 1.2rem; color: #ff9800; font-weight: bold; }
+        
+        /* 단계별 상태 아이콘 스타일 */
+        .step-icon { font-size: 1.5rem; color: #ccc; margin: 0 10px; transition: 0.3s; }
+        .step-active { color: #2196f3; transform: scale(1.2); }
+        .step-text { font-size: 0.8rem; display: block; margin-top: 5px; }
+
+        /* 컵 기울기 애니메이션 */
+        #cup-icon { font-size: 3rem; color: #555; transition: transform 0.2s; display: inline-block; }
+        
+        .btn-estop { width: 100%; height: 60px; font-size: 1.5rem; font-weight: bold; background-color: #dc3545; color: white; border-radius: 10px; animation: pulse 2s infinite; border: 3px solid #b02a37; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(220, 53, 69, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); } }
+    </style>
+</head>
+<body onload="resetData()">
+
+<div class="container-fluid px-4 py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="header-title"><i class="fas fa-flask"></i> Smart Lab Pouring System V15</h2>
+            <p class="text-muted mb-0">Advanced Feedback Control & Analytics</p>
+        </div>
+        <div id="connection-status" class="badge bg-secondary">System Offline</div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-3">
+            <div class="card h-100">
+                <div class="card-header"><i class="fas fa-sliders-h"></i> 1. 실험 설정</div>
+                <div class="card-body">
+                    <label class="form-label fw-bold">재료 선택</label>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6"><input type="radio" class="btn-check" name="material" id="mat_water" value="water" checked><label class="btn btn-outline-primary w-100" for="mat_water">💧 물</label></div>
+                        <div class="col-6"><input type="radio" class="btn-check" name="material" id="mat_ethanol" value="ethanol"><label class="btn btn-outline-info w-100" for="mat_ethanol">🧪 에탄올</label></div>
+                        <div class="col-6"><input type="radio" class="btn-check" name="material" id="mat_gravel" value="gravel"><label class="btn btn-outline-warning w-100" for="mat_gravel">🪨 자갈</label></div>
+                        <div class="col-6"><input type="radio" class="btn-check" name="material" id="mat_beads" value="beads"><label class="btn btn-outline-success w-100" for="mat_beads">⚪ 비즈</label></div>
+                    </div>
+
+                    <label class="form-label fw-bold">목표 용량</label>
+                    <div class="input-group mb-3">
+                        <input type="number" id="target_weight" class="form-control form-control-lg" value="50" step="10">
+                        <span class="input-group-text">g</span>
+                    </div>
+
+                    <label class="form-label fw-bold">속도 설정</label>
+                    <input type="range" class="form-range" id="speed_slider" min="1" max="100" value="50">
+                    
+                    <hr>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-secondary" onclick="resetData()">데이터 초기화 (Reset)</button>
+                        <button class="btn btn-success btn-lg" onclick="startExperiment()">실험 시작</button>
+                    </div>
+
+                    <div class="mt-4 p-3 bg-light rounded text-center">
+                        <small class="text-muted">실험 성공률 (Success Rate)</small>
+                        <h4 class="fw-bold mb-0"><span id="success_rate">0</span>% <span class="fs-6 text-muted" id="success_count">(0/0)</span></h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card text-center">
+                <div class="card-header"><i class="fas fa-balance-scale"></i> 실시간 모니터링</div>
+                <div class="card-body">
+                    <div class="row align-items-center">
+                        <div class="col-6 border-end">
+                            <small class="text-muted">현재 무게</small>
+                            <div class="weight-display"><span id="current_weight">0.0</span> <span class="fs-4">g</span></div>
+                        </div>
+                        <div class="col-6">
+                            <small class="text-muted">현재 유량 (Flow Rate)</small>
+                            <div class="flow-display"><span id="current_flow">0.0</span> g/s</div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-2">
+                        <span class="badge bg-light text-dark border">오차율: <span id="error_rate">0.0</span>%</span>
+                    </div>
+
+                    <div class="progress mt-3" style="height: 25px;">
+                        <div id="progress-bar" class="progress-bar bg-info" style="width: 0%">0%</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-dark text-white d-flex justify-content-between">
+                    <span><i class="fas fa-chart-line"></i> 데이터 분석</span>
+                    <button class="btn btn-sm btn-light py-0" onclick="exportToCSV()">CSV 저장</button>
+                </div>
+                <div class="card-body">
+                    <div style="height: 200px;"><canvas id="weightChart"></canvas></div>
+                    <hr>
+                    <div style="height: 100px;"><canvas id="flowChart"></canvas></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-3">
+            <button class="btn-estop mb-3 shadow" onclick="emergencyStop()">긴급 중단 (STOP)</button>
+            
+            <div class="card text-center py-2">
+                <div class="d-flex justify-content-center align-items-center">
+                    <div class="mx-2 step-active" id="step-ready">
+                        <i class="fas fa-pause-circle step-icon"></i>
+                        <span class="step-text">대기</span>
+                    </div>
+                    <div class="mx-2" id="step-pouring">
+                        <i class="fas fa-tint step-icon"></i>
+                        <span class="step-text">붓기</span>
+                    </div>
+                    <div class="mx-2" id="step-done">
+                        <i class="fas fa-check-circle step-icon"></i>
+                        <span class="step-text">완료</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><i class="fas fa-robot"></i> Robot Status</div>
+                <div class="card-body text-center">
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <i id="cup-icon" class="fas fa-glass-whiskey"></i>
+                            <div class="mt-1 small fw-bold">Tilt: <span id="robot_angle">0</span>°</div>
+                        </div>
+                        <div class="col-6 d-flex flex-column justify-content-center">
+                             <div class="badge bg-secondary mb-2">Speed: <span id="robot_speed">0</span>%</div>
+                             <div class="badge bg-warning text-dark">Accel: <span id="robot_acc">0.0</span></div>
+                        </div>
+                    </div>
+                    
+                    <small class="text-muted d-block text-start border-top pt-2">Joint Angles:</small>
+                    <div class="row small text-center g-1">
+                        <div class="col-4 bg-light rounded">J1: <span id="val_j1">-</span></div>
+                        <div class="col-4 bg-light rounded">J2: <span id="val_j2">-</span></div>
+                        <div class="col-4 bg-light rounded">J3: <span id="val_j3">-</span></div>
+                        <div class="col-4 bg-light rounded">J4: <span id="val_j4">-</span></div>
+                        <div class="col-4 bg-light rounded">J5: <span id="val_j5">-</span></div>
+                        <div class="col-4 bg-light rounded">J6: <span id="val_j6">-</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card h-100">
+                <div class="card-header bg-secondary text-white"><i class="fas fa-terminal"></i> System Log</div>
+                <div class="card-body bg-light p-0">
+                    <div id="log-box" style="height: 150px; overflow-y: auto; padding: 10px; font-family: monospace; font-size: 0.8rem;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+<script>
+    // 1. Firebase 설정
+    const firebaseConfig = { apiKey: "AIzaSyBOVQ2tEPWe_GfIBavzqcw1ppfe2EqiRdE", authDomain: "colab1-78afc.firebaseapp.com", databaseURL: "https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app", projectId: "colab1-78afc", storageBucket: "colab1-78afc.firebasestorage.app", messagingSenderId: "312617327218", appId: "1:312617327218:web:2564e4ed07449d381dc0eb" };
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
+    // 2. 전역 변수
+    let isRunning = false;
+    let startTime = 0;
+    let lastWeight = 0;
+    let lastTime = 0;
+    let experimentData = [];
+    
+    // 통계 변수
+    let totalAttempts = 0;
+    let successCount = 0;
+
+    // 3. 차트 설정 (무게 & 유량)
+    const weightChartCtx = document.getElementById('weightChart').getContext('2d');
+    const flowChartCtx = document.getElementById('flowChart').getContext('2d');
+
+    const weightChart = new Chart(weightChartCtx, {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'Weight (g)', data: [], borderColor: '#2196f3', borderWidth: 2, fill: true, backgroundColor: 'rgba(33, 150, 243, 0.1)', pointRadius: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { display: false }, title: { display: true, text: 'Time-Weight Graph' } } }
+    });
+
+    const flowChart = new Chart(flowChartCtx, {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'Flow Rate (g/s)', data: [], borderColor: '#ff9800', borderWidth: 1, fill: false, pointRadius: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { display: false }, title: { display: true, text: 'Flow Rate (g/s)' } } }
+    });
+
+    // 4. 초기화 함수
+    function resetData() {
+        document.getElementById('current_weight').innerText = "0.0";
+        document.getElementById('current_flow').innerText = "0.0";
+        document.getElementById('error_rate').innerText = "0.0";
+        document.getElementById('progress-bar').style.width = "0%";
+        document.getElementById('progress-bar').innerText = "0%";
+        document.getElementById('progress-bar').className = "progress-bar bg-info";
+        
+        // 차트 리셋
+        weightChart.data.labels = [];
+        weightChart.data.datasets[0].data = [];
+        weightChart.update();
+        
+        flowChart.data.labels = [];
+        flowChart.data.datasets[0].data = [];
+        flowChart.update();
+        
+        updateStep('ready');
+        addLog("데이터 초기화 완료");
+    }
+
+    function updateStep(step) {
+        document.querySelectorAll('.step-icon').forEach(el => el.parentElement.classList.remove('step-active'));
+        document.querySelectorAll('.step-icon').forEach(el => el.classList.remove('text-primary'));
+        
+        if(step === 'ready') document.getElementById('step-ready').classList.add('step-active');
+        if(step === 'pouring') document.getElementById('step-pouring').classList.add('step-active');
+        if(step === 'done') document.getElementById('step-done').classList.add('step-active');
+    }
+
+    function addLog(msg) {
+        const logBox = document.getElementById('log-box');
+        const time = new Date().toLocaleTimeString('ko-KR', {hour12:false});
+        if(logBox) { logBox.innerHTML += `> [${time}] ${msg}<br>`; logBox.scrollTop = logBox.scrollHeight; }
+    }
+
+    // 5. 데이터 수신 (Main Loop)
+    database.ref('sensor_data/weight').on('value', (snapshot) => {
+        const weight = parseFloat(snapshot.val() || 0);
+        const target = parseFloat(document.getElementById('target_weight').value || 1);
+        const currentTime = Date.now();
+        
+        // --- 1. 유량 계산 (g/s) ---
+        let flowRate = 0;
+        if (isRunning && lastTime > 0) {
+            const dt = (currentTime - lastTime) / 1000; // 초 단위
+            if (dt > 0) flowRate = (weight - lastWeight) / dt;
+        }
+        // 노이즈 제거를 위해 음수는 0 처리
+        flowRate = Math.max(0, flowRate);
+        
+        // --- 2. UI 업데이트 ---
+        document.getElementById('current_weight').innerText = weight.toFixed(1);
+        document.getElementById('current_flow').innerText = flowRate.toFixed(1);
+        
+        // 오차율 계산
+        let errorRate = 0;
+        if(target > 0) errorRate = ((weight - target) / target) * 100;
+        document.getElementById('error_rate').innerText = Math.abs(errorRate).toFixed(1);
+
+        // 진행바
+        let percent = (weight / target) * 100;
+        const progressBar = document.getElementById('progress-bar');
+        if(progressBar) {
+            progressBar.style.width = Math.min(percent, 100) + "%";
+            progressBar.innerText = Math.round(percent) + "%";
+            progressBar.className = percent >= 98 ? "progress-bar bg-success" : "progress-bar bg-info";
+        }
+
+        // --- 3. 차트 업데이트 ---
+        const timeLabel = new Date().toLocaleTimeString(); 
+        
+        // 데이터가 너무 많으면 앞부분 삭제
+        if (weightChart.data.labels.length > 50) {
+            weightChart.data.labels.shift();
+            weightChart.data.datasets[0].data.shift();
+            flowChart.data.labels.shift();
+            flowChart.data.datasets[0].data.shift();
+        }
+
+        weightChart.data.labels.push(timeLabel);
+        weightChart.data.datasets[0].data.push(weight);
+        weightChart.update('none'); // 애니메이션 없이 업데이트 (성능 최적화)
+
+        flowChart.data.labels.push(timeLabel);
+        flowChart.data.datasets[0].data.push(flowRate);
+        flowChart.update('none');
+
+        // --- 4. 상태 업데이트 ---
+        if (isRunning) {
+            experimentData.push({ time: ((currentTime - startTime)/1000).toFixed(1), weight: weight, flow: flowRate });
+            
+            // 유량이 있으면 '붓기' 단계로 표시
+            if (flowRate > 0.5) updateStep('pouring');
+            
+            // 완료 체크 (오차범위 2g 이내)
+            if (Math.abs(weight - target) < 2.0 && weight > (target * 0.9)) {
+                updateStep('done');
+            }
+        }
+
+        lastWeight = weight;
+        lastTime = currentTime;
+    });
+
+    // 로봇 상태 수신
+    database.ref('robot_status').on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+            document.getElementById('connection-status').className = "badge bg-success";
+            document.getElementById('connection-status').innerText = "Online";
+            
+            if(data.current_angle !== undefined) {
+                const angle = parseFloat(data.current_angle);
+                document.getElementById('robot_angle').innerText = angle.toFixed(1);
+                // 컵 아이콘 회전
+                document.getElementById('cup-icon').style.transform = `rotate(${angle}deg)`;
+            }
+            if(data.velocity !== undefined) document.getElementById('robot_speed').innerText = data.velocity;
+            if(data.acceleration !== undefined) document.getElementById('robot_acc').innerText = data.acceleration;
+            
+            if (data.joint) {
+                for(let i=1; i<=6; i++) document.getElementById(`val_j${i}`).innerText = data.joint[`j${i}`];
+            }
+        }
+    });
+
+    // 제어 함수
+    function startExperiment() {
+        resetData();
+        const target = document.getElementById('target_weight').value;
+        const material = document.querySelector('input[name="material"]:checked').value;
+        const speed = document.getElementById('speed_slider').value;
+
+        if(confirm(`${material} 실험 시작 (목표: ${target}g)`)) {
+            // 영점 조절 명령
+            database.ref('commands').set({ type: "tare", timestamp: Date.now() });
+            
+            setTimeout(() => {
+                database.ref('commands').set({
+                    type: "start_pouring",
+                    target_weight: target,
+                    material: material,
+                    initial_speed: speed,
+                    timestamp: Date.now()
+                });
+                
+                isRunning = true;
+                startTime = Date.now();
+                lastTime = Date.now();
+                lastWeight = 0;
+                experimentData = [];
+                
+                // 통계 업데이트 (시도 횟수 증가)
+                totalAttempts++;
+                updateStats();
+
+                chartUpdates(); // 차트 스케일 조정 등
+                addLog(`실험 시작: ${material}, ${target}g`);
+                updateStep('pouring'); // 시작하면 바로 붓기 준비로 간주 (간소화)
+            }, 500);
+        }
+    }
+
+    function emergencyStop() {
+        database.ref('commands').set({ type: "emergency_stop", timestamp: Date.now() });
+        isRunning = false;
+        addLog("🚨 긴급 정지 발동!");
+        // 실패 처리 (긴급 정지는 실패로 간주)
+        updateStats();
+    }
+    
+    function updateStats() {
+        // 성공률 계산 (여기서는 간단히 완료 상태면 성공이라 가정, 실제로는 완료 신호를 받아야 정확함)
+        // 일단 UI상 표기만 업데이트
+        const rate = totalAttempts > 0 ? ((successCount / totalAttempts) * 100).toFixed(0) : 0;
+        document.getElementById('success_rate').innerText = rate;
+        document.getElementById('success_count').innerText = `(${successCount}/${totalAttempts})`;
+    }
+
+    function chartUpdates() {
+        const target = document.getElementById('target_weight').value;
+        weightChart.options.scales.y.suggestedMax = Math.max(100, target * 1.2);
+        weightChart.update();
+    }
+
+    function exportToCSV() {
+        if (experimentData.length === 0) { alert("저장할 데이터가 없습니다."); return; }
+        let csvContent = "data:text/csv;charset=utf-8,Time(s),Weight(g),Flow(g/s)\r\n";
+        experimentData.forEach(row => { csvContent += `${row.time},${row.weight},${row.flow.toFixed(2)}\r\n`; });
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `experiment_${Date.now()}.csv`);
+        document.body.appendChild(link);
+        link.click();
+    }
+</script>
+</body>
+</html>
