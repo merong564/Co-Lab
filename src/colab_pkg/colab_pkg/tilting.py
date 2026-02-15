@@ -25,12 +25,12 @@ ACC = 60
 
 # P제어 게인
 P_GAIN = 0.03
-MAX_TILT_STEP = 5.0 
+MAX_TILT_STEP = 3.0 
 WEIGHT_TOLERANCE = 1.0
 
 # [추가] 목표 도달 전 미리 멈추고 복귀할 임계값 (단위: g)
 # 예: 목표가 200g이고 이 값이 10.0이면, 190g에서 붓기를 멈추고 원복함
-STOP_THRESHOLD = 10.0
+STOP_THRESHOLD = 40.0
 
 # DR_init 설정
 DR_init.__dsr__id = ROBOT_ID
@@ -167,7 +167,7 @@ def perform_task_real(node):
             movel(pour_ready_pos, vel=150, acc=150) # 복귀는 조금 더 빠르게 설정
             
             # 최종 무게 확인
-            time.sleep(1.0) # 잔량 떨어지는 것 대기
+            time.sleep(1.0) # 잔량 떨어지는 것 대기 
             final_weight = node.current_weight
             print(f"✅ [Done] Final Weight: {final_weight:.1f}g / Target: {target_weight}g")
 
@@ -193,8 +193,8 @@ def perform_task_real(node):
                 
                 step_count += 1
                 
-                # 실제 로봇 반응 및 센서 딜레이 고려하여 적절한 대기 시간 설정
-                time.sleep(0.5) 
+                # 튜닝 요소: (Loop 속도) 실제 로봇 반응 및 센서 딜레이 고려하여 적절한 대기 시간 설정
+                time.sleep(0.1)  
             else:
                 print("[ERROR] Failed to get current position")
                 break
