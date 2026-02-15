@@ -4,6 +4,9 @@ import DR_init
 import time
 import threading
 
+# 무게값 메시지 타입 임포트
+from std_msgs.msg import Float32
+
 # ==========================================
 # 1. 설정 및 상수
 # ==========================================
@@ -67,73 +70,70 @@ def calculate_tilt_angle(current_w, target_w):
     return delta_angle, error
 
 def perform_task_simulation():
-    """틸팅 로직 단독 테스트 함수"""
     from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait
     
-    # 1. 테스트 변수 설정
-    current_weight = TEST_START_WEIGHT
-    target_weight = TEST_TARGET_WEIGHT
+    # 1. 초기 위치 정의 (루프 밖에서 정의)
+    pour_ready_pos = posx(585.44, 157.76, 242.63, 91.92, 97.36, 88.55) # 큰 시험관 위치
     
-    print(f"🚀 Simulation Start! Target: {target_weight}g")
-    time.sleep(1)
+    # 2. 사용자 입력 받기 (이전 요청 반영)
+    try:
+        input_val = input("Enter Target Weight (g): ")
+        target_weight = float(input_val)
+    except ValueError:
+        print("[ERROR] Invalid input. Setting default to 300.0")
+        target_weight = 300.0
 
+    current_weight = TEST_START_WEIGHT
     
+    print(f"[SYSTEM] Simulation Start. Target: {target_weight}g")
+    
+    # 3. 초기 위치로 이동 (루프 진입 전 1회 수행)
+    movel(pour_ready_pos, vel=100, acc=100)
+    print("[SYSTEM] Moved to ready position.")
+    wait(1.0)
+
+    step_count = 0
 
     while rclpy.ok():
-        # --- 좌표 정의 ---
+        # 목표 무게 도달 여부 확인
+        if current_weight >= (target_weight - WEIGHT_TOLERANCE):
+            print(f"[Done] Final Weight: {current_weight}g / Target: {target_weight}g")
+            break
 
-        # 1. 비커 앞 대기 위치 (수직 상태)
-        pour_ready_pos = posx(604.44, 157.76, 242.63, 91.92, 97.36, 88.55)
+        # 4. P제어 알고리즘 수행
+        delta, error = calculate_tilt_angle(current_weight, target_weight)
+        
+        # 5. 시뮬레이션 동작
+        # 실제로는 error가 줄어들수록 delta(기울이는 양)가 줄어들어야 정상적인 P제어입니다.
+        try:
+            current_joints = get_current_posj()
+            if current_joints is not None:
+                target_joints = list(current_joints)
+                
+                # 6축(J6) 회전 반영
+                target_joints[5] += delta 
+                
+                # 로봇 이동
+                movej(target_joints, vel=VELOCITY, acc=ACC)
+                
+                # [데이터 로그 출력]
+                # 이 로그를 보고 P제어가 먹히는지 판단합니다.
+                # Error가 줄어듦에 따라 Delta(Tilt Step)도 같이 줄어드는지 확인하세요.
+                print(f"[Step {step_count:02d}] Cur: {current_weight:6.1f} | Err: {error:6.1f} | Control(Delta): {delta:5.2f}")
 
-        # 2. 따르는 위치 (기울인 상태)
-        pour_action_pos = posx(632.66, 159.7, 213.75, 87.33, 99.03, 158.27)
-
-
-        # --- 실행 로직 ---
-
-        # 1. 정위치로 이동
-        movel(pour_ready_pos, vel=100, acc=100)
-        print(f"pour ready pos")
-        wait(1.0) 
-
-        # 티칭 펜던트 로그에 출력
-        #tp_log("작업 후 잔여 무게(Fz): {} N".format(current_weight))
-
-        if current_weight < (target_weight - WEIGHT_TOLERANCE):
-            
-            # 3. 각도 계산 (P제어)
-            delta, error = calculate_tilt_angle(current_weight, target_weight)
-            
-            print(f"[Sim] Cur: {current_weight:.1f}g / Target: {target_weight}g -> Error: {error:.1f} -> Tilt J6: {delta:.2f} deg")
-            
-            # 4. 로봇 구동
-            try:
-                current_joints = get_current_posj()
-                if current_joints is not None:
-                    target_joints = list(current_joints)
-                    
-                    # 6축(Index 5) 회전
-                    target_joints[5] += delta 
-                    
-                    # 실제 로봇 이동
-                    movej(target_joints, vel=VELOCITY, acc=ACC)
-                    
-                    # [중요] 시뮬레이션: 로봇이 움직였으니 무게가 찼다고 '가정'하고 값을 올림
-                    # 실제 센서가 없으므로 이렇게 안 하면 무한히 회전함
-                    current_weight += SIMULATED_POUR_AMOUNT
-                    
-                    # 너무 빠르지 않게 대기
-                    time.sleep(0.5)
-                else:
-                    print("Error: Failed to get current position")
-                    break
-                    
-            except Exception as e:
-                print(f"Move Error: {e}")
+                # 시뮬레이션: 무게 증가 (가정)
+                # 실제 환경과 비슷하게 하려면, 기울인 각도가 클수록 무게가 많이 차게 로직을 짤 수도 있지만
+                # 지금은 P제어 동작(Error -> Delta) 확인이 목적이므로 고정값 증가도 괜찮습니다.
+                current_weight += SIMULATED_POUR_AMOUNT
+                
+                step_count += 1
+                time.sleep(0.5)
+            else:
+                print("[ERROR] Failed to get current position")
                 break
-            
-        else:
-            print(f"✅ Simulation Complete! Final Weight: {current_weight}g")
+                
+        except Exception as e:
+            print(f"[ERROR] Move Error: {e}")
             break
 
 # ==========================================
