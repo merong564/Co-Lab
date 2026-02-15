@@ -6,44 +6,53 @@ import DR_init
 import time
 import threading
 
-# 메시지 타입 임포트
+# 무게값 메시지 타입 임포트
 from std_msgs.msg import Float32
-from colab_interfaces.msg import UiInput
 
-# 로봇 설정 상수 (필요에 따라 수정)
+# [수정] UI 메시지 타입 임포트 제거
+# from colab_interfaces.msg import UiInput 
+
+# ==========================================
+# 1. 설정 및 상수
+# ==========================================
 ROBOT_ID = "dsr01"
 ROBOT_MODEL = "m0609"
 ROBOT_TOOL = "Tool Weight"
 ROBOT_TCP = "GripperDA_v1"
 
-# 이동 속도 및 가속도 (필요에 따라 수정)
 VELOCITY = 40
 ACC = 60
+
+# P제어 게인
+P_GAIN = 0.03
+MAX_TILT_STEP = 5.0 
+WEIGHT_TOLERANCE = 1.0
+
+# [추가] 목표 도달 전 미리 멈추고 복귀할 임계값 (단위: g)
+# 예: 목표가 200g이고 이 값이 10.0이면, 190g에서 붓기를 멈추고 원복함
+STOP_THRESHOLD = 10.0
 
 # DR_init 설정
 DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
-P_GAIN = 0.05
-# 안전을 위한 한 번에 움직이는 최대 각도 제한 (도)
-MAX_TILT_STEP = 5.0 
+# 디지털 출력 상태
+ON, OFF = 1, 0
 
-# 무게 오차 허용 범위 (g) - 이 범위 안에 들어오면 정지
-WEIGHT_TOLERANCE = 1.0
-
+# ==========================================
+# 2. ROS 2 노드
+# ==========================================
 class TiltingController(Node):
     def __init__(self):
-        super().__init__('tilting_node', namespace=ROBOT_ID)
-
-        # [중요] 콜백 그룹 설정: 서로 다른 콜백(센서, 로봇이동)이 동시에 실행되도록 함
+        super().__init__('tilting_real_node', namespace=ROBOT_ID)
+        
+        # 콜백 그룹 설정 (멀티스레드 실행을 위해)
         self.callback_group = ReentrantCallbackGroup()
         
-        # 전역 변수처럼 쓸 데이터 저장소
+        # 데이터 저장용 변수
         self.current_weight = 0.0
-        self.target_weight = 0.0
-        self.is_confirmed = False
         
-        # 1) 로드셀 무게 구독 (/load_cell/weight)
+        # [유지] 1) 로드셀 무게 구독 (/load_cell/weight)
         self.sub_weight = self.create_subscription(
             Float32,
             '/load_cell/weight',
@@ -52,66 +61,41 @@ class TiltingController(Node):
             callback_group=self.callback_group
         )
         
-        # 2) UI 명령 구독 (/ui/command)
-        self.sub_ui = self.create_subscription(
-            UiInput,
-            '/ui/command',
-            self.ui_callback,
-            10,
-            callback_group=self.callback_group
-        )
+        # [수정] 2) UI 명령 구독 제거
+        # self.sub_ui = ... (삭제됨)
         
-        self.get_logger().info("Tilting Controller Node Started")
+        self.get_logger().info("Setup: Real Mode (Weight Topic Only)")
 
+    # 무게 콜백 함수
     def weight_callback(self, msg):
         self.current_weight = msg.data
-        # 디버깅용 (너무 자주 뜨면 주석 처리)
-        # self.get_logger().info(f"Current Weight: {self.current_weight}")
+        # 디버깅이 필요하면 주석 해제 (너무 자주 출력될 수 있음)
+        # self.get_logger().info(f"Weight: {self.current_weight}")
 
-    def ui_callback(self, msg):
-        self.target_weight = msg.target_weight
-        self.is_confirmed = msg.is_confirmed
-        self.get_logger().info(f"UI Command Received -> Target: {self.target_weight}, Confirmed: {self.is_confirmed}")
+    # [수정] UI 콜백 함수 제거
+    # def ui_callback(self, msg): ... (삭제됨)
 
-
+# ==========================================
+# 3. 로봇 제어 및 계산 함수
+# ==========================================
 def initialize_robot():
-    """로봇의 Tool과 TCP를 설정"""
-    from DSR_ROBOT2 import set_tool, set_tcp,get_tool,get_tcp,ROBOT_MODE_MANUAL,ROBOT_MODE_AUTONOMOUS  # 필요한 기능만 임포트
-    from DSR_ROBOT2 import get_robot_mode,set_robot_mode
+    """로봇 초기화"""
+    from DSR_ROBOT2 import set_tool, set_tcp, get_tool, get_tcp, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS, set_robot_mode
 
-    # Tool과 TCP 설정시 매뉴얼 모드로 변경해서 진행
     set_robot_mode(ROBOT_MODE_MANUAL)
     set_tool(ROBOT_TOOL)
     set_tcp(ROBOT_TCP)
-    
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-    time.sleep(2)  # 설정 안정화를 위해 잠시 대기
-    # 설정된 상수 출력
-    print("#" * 50)
-    print("Initializing robot with the following settings:")
-    print(f"ROBOT_ID: {ROBOT_ID}")
-    print(f"ROBOT_MODEL: {ROBOT_MODEL}")
-    print(f"ROBOT_TCP: {get_tcp()}") 
-    print(f"ROBOT_TOOL: {get_tool()}")
-    print(f"ROBOT_MODE 0:수동, 1:자동 : {get_robot_mode()}")
-    print(f"VELOCITY: {VELOCITY}")
-    print(f"ACC: {ACC}")
-    print("#" * 50)
+    time.sleep(1)
+    
+    print(f"Robot Initialized: {ROBOT_ID}")
 
 def calculate_tilt_angle(current_w, target_w):
-    """
-    P제어를 통해 기울일 각도(delta)를 계산하는 함수
-    :return: 더 기울여야 할 각도 (float)
-    """
+    """P제어 각도 계산"""
     error = target_w - current_w
-    
-    # 목표 무게보다 현재 무게가 더 많으면(오버필) 멈추거나 반대로 들어야 함
-    # 여기서는 붓는 과정이므로 오차만큼 더 기울이는(양수) 로직
-    
-    # P제어: 오차 * 게인
     delta_angle = error * P_GAIN
     
-    # 안전장치: 한 번에 너무 확 기울이지 않도록 제한 (Clamping)
+    # 안전장치 (Clamping)
     if delta_angle > MAX_TILT_STEP:
         delta_angle = MAX_TILT_STEP
     elif delta_angle < -MAX_TILT_STEP:
@@ -119,99 +103,134 @@ def calculate_tilt_angle(current_w, target_w):
         
     return delta_angle, error
 
-
-def perform_task(ros_node):
-    """로봇이 수행할 작업"""
-    print("Performing task...")
-    from DSR_ROBOT2 import posx,movej,get_current_posj
-    # # 초기 위치 및 목표 위치 설정
-    # JReady = [0, 0, 90, 0, 90, 0]
-    # pos1 = posx([500, 80, 200, 150, 179, 150])
-
-    # # 반복 동작 수행
-    # while True:       
-    #     # 이동 명령 실행
-    #     print("movej")
-    #     movej(JReady, vel=VELOCITY, acc=ACC)
-    #     print("movel")
-    #     movel(pos1, vel=VELOCITY, acc=ACC)
-
-    print("Waiting for UI confirmation...")
+def perform_task_real(node):
+    from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait, set_digital_output, get_digital_input, posj
     
-    # 작업 루프
+    # 디지털 입력 신호 대기 함수
+    def wait_digital_input(sig_num):
+        while not get_digital_input(sig_num):
+            wait(0.5)
+            # print("Waiting for digital input...")
+
+    # Release 동작
+    def release():
+        print("Releasing...")
+        set_digital_output(2, ON)
+        set_digital_output(1, OFF)
+        wait_digital_input(2)
+
+    # Grip 동작
+    def grip():
+        print("Gripping...")
+        # release()
+        set_digital_output(1, ON)
+        set_digital_output(2, OFF)
+        wait_digital_input(1)
+
+    # 1. 초기 위치 정의
+    pour_ready_pos = posx(585.44, 157.76, 242.63, 91.92, 97.36, 88.55) # 큰 시험관 위치
+    
+    # 2. [수정] 사용자 입력(input) 받기
+    try:
+        input_val = input("Enter Target Weight (g): ")
+        target_weight = float(input_val)
+    except ValueError:
+        print("[ERROR] Invalid input. Setting default to 300.0")
+        target_weight = 300.0
+        
+    print(f"[SYSTEM] Task Start! Target: {target_weight}g")
+    
+    # # 3. 초기 위치로 이동
+    # release()
+    # wait(0.5)
+    # # 홈 위치로 이동
+    # p0 = posj(0,0,90,0,90,0)
+    # movej(p0,vel=100,acc=50) 
+
+    # 틸팅 위치로 이동
+    movel(pour_ready_pos, vel=100, acc=100)
+    print("[SYSTEM] Moved to ready position.")
+    wait(1.0)
+
+    step_count = 0
+
     while rclpy.ok():
-        # 1. 사용자가 시작을 눌렀는지 확인
-        if ros_node.is_confirmed:
+        # 실시간 무게값 갱신 (콜백에 의해 node.current_weight가 계속 변함)
+        current_weight = node.current_weight
+
+        # [수정] 목표 무게보다 STOP_THRESHOLD 만큼 덜 찼을 때 미리 멈춤
+        stop_target = target_weight - STOP_THRESHOLD
+        
+        # 목표 무게 도달 여부 확인
+        if current_weight >= stop_target:
+            print("Returning to Upright Position Immediately...")
+            movel(pour_ready_pos, vel=150, acc=150) # 복귀는 조금 더 빠르게 설정
             
-            # 2. 목표 무게 도달 여부 확인
-            # (목표값 - 허용오차) 보다 현재 무게가 작으면 계속 붓기
-            if ros_node.current_weight < (ros_node.target_weight - WEIGHT_TOLERANCE):
-                
-                # 3. P제어로 각도 계산
-                delta, error = calculate_tilt_angle(ros_node.current_weight, ros_node.target_weight)
-                
-                print(f"[Tilting] Error: {error:.2f}g -> Moving J6 by {delta:.2f} deg")
-                
-                # 4. 현재 관절 각도 가져오기
-                current_joints = get_current_posj() # [J1, J2, J3, J4, J5, J6]
-                
-                # 5. 6축(Index 5)만 회전
-                # 주의: 로봇 설정에 따라 +가 붓는 방향인지 -가 붓는 방향인지 확인 필요
-                # 여기서는 +를 붓는 방향(Down)으로 가정
+            # 최종 무게 확인
+            time.sleep(1.0) # 잔량 떨어지는 것 대기
+            final_weight = node.current_weight
+            print(f"✅ [Done] Final Weight: {final_weight:.1f}g / Target: {target_weight}g")
+
+            break
+
+        # 4. P제어 알고리즘 수행
+        delta, error = calculate_tilt_angle(current_weight, target_weight)
+        
+        # 5. 로봇 동작
+        try:
+            current_joints = get_current_posj()
+            if current_joints is not None:
                 target_joints = list(current_joints)
+                
+                # 6축(J6) 회전 반영
                 target_joints[5] += delta 
                 
-                # 6. 로봇 이동 (movej 사용)
-                # P제어이므로 부드럽게 연결되려면 속도를 적절히 조절하거나 movej 대신 amovej 등을 고려할 수 있음
+                # 로봇 이동
                 movej(target_joints, vel=VELOCITY, acc=ACC)
                 
-            elif ros_node.current_weight >= (ros_node.target_weight - WEIGHT_TOLERANCE):
-                print(f"✅ Target Reached! ({ros_node.current_weight} / {ros_node.target_weight})")
-                # 목표 도달 시 루프를 탈출하거나 대기 (여기서는 1초 대기 후 상태 유지)
-                time.sleep(1)
-                # 필요하다면 is_confirmed를 False로 바꿔서 다시 대기 상태로 갈 수 있음
-                # ros_node.is_confirmed = False 
+                # [데이터 로그 출력]
+                print(f"[Step {step_count:02d}] Cur: {current_weight:6.1f} | Err: {error:6.1f} | Control(Delta): {delta:5.2f}")
                 
-        else:
-            # UI 입력 대기 중
-            time.sleep(0.5)
-    
+                step_count += 1
+                
+                # 실제 로봇 반응 및 센서 딜레이 고려하여 적절한 대기 시간 설정
+                time.sleep(0.5) 
+            else:
+                print("[ERROR] Failed to get current position")
+                break
+                
+        except Exception as e:
+            print(f"[ERROR] Move Error: {e}")
+            break
 
+# ==========================================
+# 4. 메인 실행부
+# ==========================================
 def main(args=None):
-    """메인 함수: ROS2 노드 초기화 및 동작 수행"""
-    # rclpy.init(args=args)
-    # node = rclpy.create_node("move_basic", namespace=ROBOT_ID)
-
-    # # DR_init에 노드 설정
-    # DR_init.__dsr__node = node
-
     rclpy.init(args=args)
     
-    # 1. ROS 노드 생성
+    # 노드 생성 및 연결
     node = TiltingController()
-    DR_init.__dsr__node = node # 두산 로봇에 노드 연결
-
+    DR_init.__dsr__node = node
+    
+    # 멀티스레드 실행기 설정
     executor = MultiThreadedExecutor()
     executor.add_node(node)
 
-    # 2. ROS 콜백을 처리할 별도 스레드 시작
-    # (이게 없으면 perform_task의 while 루프 때문에 토픽을 못 받아옴)
+    # 백그라운드 스레드에서 spin 실행 (토픽 수신용)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
     
-
     try:
-        # 초기화는 한 번만 수행
         initialize_robot()
-
-        # 작업 수행 (한 번만 호출)
-        # perform_task()
-        perform_task(node)
+        
+        # 노드를 인자로 전달하여 실행
+        perform_task_real(node)
 
     except KeyboardInterrupt:
-        print("\nNode interrupted by user. Shutting down...")
+        print("\nShutting down...")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        print(f"Error: {e}")
     finally:
         node.destroy_node()
         rclpy.shutdown()
