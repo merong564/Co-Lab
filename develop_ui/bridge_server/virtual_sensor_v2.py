@@ -50,7 +50,7 @@ class VirtualWaterSensor(Node):
         # 0.1초마다 무게 계산
         self.timer = self.create_timer(0.1, self.update_weight)
         
-        self.get_logger().info('💧 가상 센서 V3 준비 완료 (Topic: /ui/input 대기 중)')
+        self.get_logger().info('💧 가상 센서 V2 준비 완료 (Topic: /ui/input 대기 중)')
 
     def ui_input_callback(self, msg):
         """UI에서 [실험 시작]을 누르면 호출됨"""
@@ -70,14 +70,18 @@ class VirtualWaterSensor(Node):
             self.current_tilt = math.degrees(msg.position[5])
 
     def update_weight(self):
-        # 1. 활성화 상태가 아니면 무게만 유지하고 계산 안 함
         if not self.is_active:
             self.publish_weight()
             return
 
-        # 2. [가상 물리 법칙]
-        POURING_THRESHOLD = 45.0  # 기울기 임계값
-        POURING_SPEED = 2.5       # 유속 (0.1초당 2.5g = 초당 25g)
+        # [수정] 45도 -> 10도로 변경!
+        POURING_THRESHOLD = 10.0  
+        POURING_SPEED = 2.5       
+
+        if abs(self.current_tilt) > POURING_THRESHOLD:
+            self.current_weight += POURING_SPEED
+        
+        self.publish_weight()
 
         # 기울기가 임계값을 넘으면 무게 증가
         if abs(self.current_tilt) > POURING_THRESHOLD:
