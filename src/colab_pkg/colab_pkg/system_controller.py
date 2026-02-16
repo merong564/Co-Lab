@@ -22,7 +22,7 @@ class SystemController(Node):
     def send_pouring_request(self, target_weight):
         """TaskPouring 노드에 붓기 명령 전송"""
         req = RobotCommand.Request()
-        req.target_val = float(target_weight) # 실수형으로 변환하여 전송
+        req.target_weight = float(target_weight) # 실수형으로 변환하여 전송
         
         self.get_logger().info(f"[Request] Sending command: Pour {target_weight}g ...")
         
@@ -50,10 +50,10 @@ def main(args=None):
                 break
             
             try:
-                target_val = float(user_input)
+                target_weight = float(user_input)
                 
                 # 서비스 요청 및 결과 수신
-                response = controller.send_pouring_request(target_val)
+                response = controller.send_pouring_request(target_weight)
                 
                 # 결과 출력
                 if response.success:

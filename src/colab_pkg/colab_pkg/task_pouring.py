@@ -6,15 +6,8 @@ import DR_init
 import time
 import threading
 
-
-# 컨트롤러 노드와 통신하는 서비스 타입 임포트
 from colab_interfaces.srv import RobotCommand
-
-# 무게값 메시지 타입 임포트
 from std_msgs.msg import Float32
-
-# [수정] UI 메시지 타입 임포트 제거
-# from colab_interfaces.msg import UiInput 
 
 # ==========================================
 # 1. 설정 및 상수
@@ -26,45 +19,30 @@ ROBOT_TCP = "GripperDA_v1"
 
 VELOCITY = 40
 ACC = 60
-
-# P제어 게인
 P_GAIN = 0.03
 MAX_TILT_STEP = 3.0 
-WEIGHT_TOLERANCE = 1.0
-
-# [추가] 목표 도달 전 미리 멈추고 복귀할 임계값 (단위: g)
-# 예: 목표가 200g이고 이 값이 10.0이면, 190g에서 붓기를 멈추고 원복함
 STOP_THRESHOLD = 40.0
 
-# DR_init 설정
-DR_init.__dsr__id = ROBOT_ID
-DR_init.__dsr__model = ROBOT_MODEL
-
-# 디지털 출력 상태
-ON, OFF = 1, 0
-
 # ==========================================
-# 2. ROS 2 노드
+# 2. 통신 전담 노드 (서비스 & 토픽)
 # ==========================================
 class TaskPouring(Node):
     def __init__(self):
-        super().__init__('task_pouring', namespace=ROBOT_ID)
+        # 이 노드는 로봇 제어와 무관하게 "통신"만 담당하므로 가볍습니다.
+        super().__init__('task_pouring_server', namespace=ROBOT_ID)
         
-        # 콜백 그룹 설정 (멀티스레드 실행을 위해)
         self.callback_group = ReentrantCallbackGroup()
-        
-        # 데이터 저장용 변수
         self.current_weight = 0.0
 
-        # 서비스 서버 생성: 컨트롤러로부터 명령을 받는 서버 정의
+        # 서비스 서버
         self.srv_pouring = self.create_service(
             RobotCommand,
-            '/execute_pouring',
+            'execute_pouring',
             self.execute_pouring_callback,
             callback_group=self.callback_group
         )
         
-        # [유지] 1) 로드셀 무게 구독 (/load_cell/weight)
+        # 무게 구독
         self.sub_weight = self.create_subscription(
             Float32,
             '/load_cell/weight',
@@ -72,177 +50,128 @@ class TaskPouring(Node):
             10,
             callback_group=self.callback_group
         )
-        
-        # [수정] 2) UI 명령 구독 제거
-        # self.sub_ui = ... (삭제됨)
-        
-        self.get_logger().info("Setup: Real Mode (Weight Topic Only)")
-    
-    # [추가] 서비스 콜백 함수: 컨트롤러가 호출하면 실행됨
-    def execute_pouring_callback(self, request, response):
-        self.get_logger().info(f"[Service] Request Received. Target: {request.target_val}g")
-        
-        # 요청받은 목표 무게를 perform_task에 전달
-        try:
-            # perform_task 실행 (이 함수는 작업이 끝날 때까지 Blocking 됨)
-            result = perform_task(self, request.target_val)
             
-            if result:
-                response.success = True
-                response.message = "Pouring Completed Successfully"
-            else:
-                response.success = False
-                response.message = "Pouring Failed or Interrupted"
-                
-        except Exception as e:
-            self.get_logger().error(f"Task Execution Error: {e}")
-            response.success = False
-            response.message = f"Error: {str(e)}"
-
+    def execute_pouring_callback(self, request, response):
+        self.get_logger().info(f"[Service] Request Received. Target: {request.target_weight}g")
+        
+        # 로봇 제어 함수 호출 (self를 넘겨서 현재 무게를 읽을 수 있게 함)
+        success = perform_task(self, request.target_weight)
+        
+        response.success = success
+        response.message = "Pouring Completed" if success else "Pouring Failed"
         return response
 
-    # 무게 콜백 함수
     def weight_callback(self, msg):
         self.current_weight = msg.data
-        # 디버깅이 필요하면 주석 해제 (너무 자주 출력될 수 있음)
-        # self.get_logger().info(f"Weight: {self.current_weight}")
-
-    # [수정] UI 콜백 함수 제거
-    # def ui_callback(self, msg): ... (삭제됨)
-
 
 # ==========================================
-# 3. 로봇 제어 및 계산 함수
+# 3. 로봇 제어 로직 (DSR 라이브러리 사용)
 # ==========================================
 def initialize_robot():
-    """로봇 초기화"""
-    from DSR_ROBOT2 import set_tool, set_tcp, get_tool, get_tcp, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS, set_robot_mode
-
-    set_robot_mode(ROBOT_MODE_MANUAL)
-    set_tool(ROBOT_TOOL)
-    set_tcp(ROBOT_TCP)
-    set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-    time.sleep(1)
+    # 이 함수는 robot_node가 DR_init에 의해 세팅된 후 실행됩니다.
+    from DSR_ROBOT2 import set_tool, set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS
     
-    print(f"Robot Initialized: {ROBOT_ID}")
+    time.sleep(3.0) # 안전하게 노드 연결 대기
+    try:
+        print("[Thread] Initializing Robot settings...")
+        set_robot_mode(ROBOT_MODE_MANUAL)
+        set_tool(ROBOT_TOOL)
+        set_tcp(ROBOT_TCP)
+        set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+        print(f"✅ [Thread] Robot Initialized: {ROBOT_ID}")
+    except Exception as e:
+        print(f"❌ [Thread] Init Failed: {e}")
 
 def calculate_tilt_angle(current_w, target_w):
-    """P제어 각도 계산"""
     error = target_w - current_w
     delta_angle = error * P_GAIN
-    
-    # 안전장치 (Clamping)
-    if delta_angle > MAX_TILT_STEP:
-        delta_angle = MAX_TILT_STEP
-    elif delta_angle < -MAX_TILT_STEP:
-        delta_angle = -MAX_TILT_STEP
-        
+    if delta_angle > MAX_TILT_STEP: delta_angle = MAX_TILT_STEP
+    elif delta_angle < -MAX_TILT_STEP: delta_angle = -MAX_TILT_STEP
     return delta_angle, error
 
 def perform_task(node, target_weight):
+    # DSR_ROBOT2 함수들은 DR_init에 등록된 'robot_node'를 통해 명령을 보냅니다.
     from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait
 
     print(f"[SYSTEM] Task Start! Target: {target_weight}g")
+    pour_ready_pos = posx(585.44, 157.76, 242.63, 91.92, 97.36, 88.55)
 
-    # 1. 초기 위치 정의
-    pour_ready_pos = posx(585.44, 157.76, 242.63, 91.92, 97.36, 88.55) # 큰 시험관 위치        
+    try:
+        movel(pour_ready_pos, vel=100, acc=100)
+        wait(1.0) # 이동 완료 대기
+    except Exception as e:
+        print(f"[ERROR] Move Failed: {e}")
+        return False
 
-    # 틸팅 위치로 이동
-    movel(pour_ready_pos, vel=100, acc=100)
-    print("[SYSTEM] Moved to ready position.")
-    wait(1.0)
-
-    step_count = 0
-    task_success = False # 성공 여부 플래그
-
+    task_success = False
+    
     while rclpy.ok():
-        # 실시간 무게값 갱신 (콜백에 의해 node.current_weight가 계속 변함)
+        # 무게는 node에서 실시간으로 업데이트됨
         current_weight = node.current_weight
-
-        # [수정] 목표 무게보다 STOP_THRESHOLD 만큼 덜 찼을 때 미리 멈춤
         stop_target = target_weight - STOP_THRESHOLD
         
-        # 목표 무게 도달 여부 확인
         if current_weight >= stop_target:
-            print("Returning to Upright Position Immediately...")
-            movel(pour_ready_pos, vel=150, acc=150) # 복귀는 조금 더 빠르게 설정
-            
-            # 최종 무게 확인
-            time.sleep(1.0) # 잔량 떨어지는 것 대기 
-            final_weight = node.current_weight
-            print(f"✅ [Done] Final Weight: {final_weight:.1f}g / Target: {target_weight}g")
+            movel(pour_ready_pos, vel=150, acc=150)
+            time.sleep(1.0)
+            print(f"✅ [Done] Final: {current_weight:.1f}g")
             task_success = True
             break
 
-        # 4. P제어 알고리즘 수행
         delta, error = calculate_tilt_angle(current_weight, target_weight)
         
-        # 5. 로봇 동작
         try:
             current_joints = get_current_posj()
-            if current_joints is not None:
+            if current_joints:
                 target_joints = list(current_joints)
-                
-                # 6축(J6) 회전 반영
                 target_joints[5] += delta 
-                
-                # 로봇 이동
                 movej(target_joints, vel=VELOCITY, acc=ACC)
-                
-                # [데이터 로그 출력]
-                print(f"[Step {step_count:02d}] Cur: {current_weight:6.1f} | Err: {error:6.1f} | Control(Delta): {delta:5.2f}")
-                
-                step_count += 1
-                
-                # 튜닝 요소: (Loop 속도) 실제 로봇 반응 및 센서 딜레이 고려하여 적절한 대기 시간 설정
-                time.sleep(0.1)  
+                print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f}")
+                time.sleep(0.1)
             else:
-                print("[ERROR] Failed to get current position")
                 break
-                
-        except Exception as e:
-            print(f"[ERROR] Move Error: {e}")
+        except Exception:
             break
+            
     return task_success
 
 # ==========================================
-# 4. 메인 실행부
+# 4. 메인 (노드 분리 전략 적용)
 # ==========================================
 def main(args=None):
     rclpy.init(args=args)
     
-    # 노드 생성 및 연결
-    node = TaskPouring()
-    DR_init.__dsr__node = node
+    # [전략 핵심] 노드 2개 생성
+    # 1. 로봇 제어용 노드 (두산 라이브러리가 독점)
+    robot_node = rclpy.create_node("dsr_bridge_hidden", namespace=ROBOT_ID)
     
-    # 멀티스레드 실행기 설정
+    # 2. 통신용 노드 (서비스 및 무게 수신)
+    task_node = TaskPouring()
+    
+    # [연결] 무거운 짐(DR_init)은 robot_node에게 떠넘김
+    DR_init.__dsr__id = ROBOT_ID
+    DR_init.__dsr__model = ROBOT_MODEL
+    DR_init.__dsr__node = robot_node 
+    
+    # Executor에 두 노드 모두 등록 (병렬 실행)
     executor = MultiThreadedExecutor()
-    executor.add_node(node)
+    executor.add_node(robot_node)
+    executor.add_node(task_node)
 
-    # 백그라운드 스레드에서 spin 실행 (토픽 수신용)
-    spin_thread = threading.Thread(target=executor.spin, daemon=True)
-    spin_thread.start()
+    # 초기화 스레드 시작
+    init_thread = threading.Thread(target=initialize_robot, daemon=True)
+    init_thread.start()
+    
+    print("==========================================")
+    print(" [Ready] Service Server Started (Multi-Node) ")
+    print("==========================================")
     
     try:
-        initialize_robot()
-        
-        # # 노드를 인자로 전달하여 실행
-        # perform_task(node)
-
-        print("==========================================")
-        print(" [Ready] Waiting for Service Request... ")
-        print("==========================================")
-
-        # [수정] 메인 스레드는 종료되지 않고 서비스 요청을 계속 기다림
-        while rclpy.ok():
-            time.sleep(1)
-
+        executor.spin()
     except KeyboardInterrupt:
-        print("\nShutting down...")
-    except Exception as e:
-        print(f"Error: {e}")
+        pass
     finally:
-        node.destroy_node()
+        task_node.destroy_node()
+        robot_node.destroy_node()
         rclpy.shutdown()
 
 if __name__ == "__main__":
