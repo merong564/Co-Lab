@@ -30,6 +30,9 @@ setup(
             'test_tilting = colab_pkg.tilting_test:main',
             'test_ui = colab_pkg.test_ui:main',
             'test_lc = colab_pkg.test_lc:main',
+            'ctrl = colab_pkg.system_controller:main',
+            'pour = colab_pkg.task_pouring:main',
+
         ],
     },
 )

@@ -1,0 +1,10 @@
+# colab_interfaces/srv/RobotCommand.srv
+
+# Request
+string mode              # 동작 모드 (move, home, start)
+float32 target_weight    # 사용자가 입력한 목표 무게 [g]
+float32 mixing_duration    # 섞는 시간 [sec]
+---
+# Response
+bool success             # 작업 성공 여부
+string message           # 결과 메시지
