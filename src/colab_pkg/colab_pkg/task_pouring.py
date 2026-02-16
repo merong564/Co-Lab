@@ -29,7 +29,7 @@ STOP_THRESHOLD = 40.0
 class TaskPouring(Node):
     def __init__(self):
         # 이 노드는 로봇 제어와 무관하게 "통신"만 담당하므로 가볍습니다.
-        super().__init__('task_pouring_server', namespace=ROBOT_ID)
+        super().__init__('task_pouring', namespace=ROBOT_ID)
         
         self.callback_group = ReentrantCallbackGroup()
         self.current_weight = 0.0
@@ -45,7 +45,7 @@ class TaskPouring(Node):
         # 무게 구독
         self.sub_weight = self.create_subscription(
             Float32,
-            '/load_cell/weight',
+            'load_cell/weight',
             self.weight_callback,
             10,
             callback_group=self.callback_group
