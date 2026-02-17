@@ -69,7 +69,7 @@ class UserInterface(Node): # [변경] 클래스명 수정
         # 시스템 상태 저장소 (SystemStatus.msg 대응)
         self.latest_system_status = {}
 
-        self.get_logger().info('🚀 UserInterface Node V22 Started (SystemStatus Integrated)')
+        self.get_logger().info('🚀 UserInterface Node V01 Started (SystemStatus Integrated)')
 
     def loop_callback(self):
         self.check_firebase_commands()
