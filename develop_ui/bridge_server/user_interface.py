@@ -54,7 +54,7 @@ class UserInterface(Node):
             
             # 4. Subscribers (Robot -> UI)
             self.create_subscription(JointState, '/dsr01/joint_states', self.joint_callback, 10)
-            self.create_subscription(Float32, '/loadcell_weight', self.weight_callback, 10)
+            self.create_subscription(Float32, '/load_cell/weight', self.weight_callback, 10)
             self.create_subscription(SystemStatus, '/system_status', self.system_status_callback, 10)
         
         # 5. Timer & Variables
