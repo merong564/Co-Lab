@@ -26,7 +26,7 @@ class MockServerNode(Node):
         self.get_logger().info(f"📩 [Mock] Received Request | Mode: {request.mode}, Weight: {request.target_weight}, Time: {request.mixing_duration}")
         
         # 1초 정도 걸리는 척 (옵션)
-        # import time; time.sleep(1.0) 
+        import time; time.sleep(1.0) 
 
         response.success = True
         response.message = "Simulation Success"
