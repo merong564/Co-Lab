@@ -1,23 +1,10 @@
 #!/usr/bin/env python3
-"""
-task_transfer.py
-
-- 클래스명: TaskTransfer
-- 노드명: task_transfer
-- MODE로 PICKUP / RETURN 분기 (string)
-- 이동:
-  - 시험관/비커 관련 이동: movel(posx)  (직선)
-  - HOME(ready) 복귀만: movej(posj)      (요구대로 예외)
-- mix 코드는 별도 파일에서 실행
-"""
-
 import time
 import rclpy
 import DR_init
-from rclpy.node import Node
 
 # ===============================
-# 개발용 설정 (추후 srv Request로 교체)
+# 개발용 분기 (추후 RobotCommand.srv Request로 교체)
 # ===============================
 MODE = "PICKUP"        # "PICKUP" or "RETURN"
 TUBE_TYPE = "SMALL"    # "SMALL" or "LARGE"
@@ -33,8 +20,8 @@ DO_OPEN = 1
 DO_CLOSE = 2
 
 
-class TaskTransfer(Node):
-    def __init__(self):
+class TaskTransfer:
+    def __init__(self, node):
         # ===============================
         # 0) 로봇 기본 설정
         # ===============================
@@ -42,10 +29,9 @@ class TaskTransfer(Node):
         self.ROBOT_MODEL = "m0609"
         DR_init.__dsr__id = self.ROBOT_ID
         DR_init.__dsr__model = self.ROBOT_MODEL
+        DR_init.__dsr__node = node  # ✅ create_node로 만든 node
 
-        super().__init__("task_transfer", namespace=self.ROBOT_ID)
-        DR_init.__dsr__node = self
-
+        # ✅ node 세팅 이후 import (중요)
         from DSR_ROBOT2 import (
             movel, posx,
             movej, posj,
@@ -57,19 +43,22 @@ class TaskTransfer(Node):
 
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
+        # ===============================
+        # 1) 바인딩
+        # ===============================
         self.movel = movel
         self.posx = posx
         self.movej = movej
         self.posj = posj
         self.wait = wait
         self.set_digital_output = set_digital_output
-        self.REF = DR_BASE
 
+        self.REF = DR_BASE
         self.L_VEL, self.L_ACC = L_VEL, L_ACC
         self.J_VEL, self.J_ACC = J_VEL, J_ACC
 
         # ===============================
-        # 1) 모드/대상
+        # 2) 모드/대상
         # ===============================
         self.mode = (MODE or "").strip().upper()
         self.tube_type = (TUBE_TYPE or "").strip().upper()
@@ -80,12 +69,12 @@ class TaskTransfer(Node):
             raise ValueError(f"TUBE_TYPE must be SMALL or LARGE, got: {TUBE_TYPE}")
 
         # ===============================
-        # 2) HOME(ready) - 조인트 좌표계
+        # 3) HOME(ready) - 조인트 좌표계 (HOME만 movej)
         # ===============================
         self.ready_j = self.posj(0, 0, 90.0, 0, 90.0, 0)
 
         # ===============================
-        # 3) task 좌표(posx) - 너가 준 값 그대로
+        # 4) 작업 좌표(posx) - SMALL/LARGE
         # ===============================
         self.POSES = {
             "SMALL": {
@@ -116,57 +105,52 @@ class TaskTransfer(Node):
     # -------------------------------
     # motion
     # -------------------------------
-    def goL(self, p):  # movel only
+    def goL(self, p):  # movel only (작업 이동 전부 직선)
         self.movel(p, vel=self.L_VEL, acc=self.L_ACC, ref=self.REF)
 
-    def goJ_home(self):  # home만 movej
+    def goJ_home(self):  # HOME만 movej
         self.movej(self.ready_j, vel=self.J_VEL, acc=self.J_ACC)
 
     # -------------------------------
-    # PICKUP: 집고 비커 앞 대기(여기서 끝, mix는 별도)
+    # PICKUP: 집고 비커 앞 위치로 이동
     # -------------------------------
     def pickup_flow(self):
         P = self.POSES[self.tube_type]
-        pick_up = P["PICK_UP"]
-        pick_down = P["PICK_DOWN"]
-        pour_ready = P["POUR_READY"]
 
-        # (선택) 시작을 home에서 하고 싶으면 아래 줄 주석 해제
+        # 시작을 HOME에서 하고 싶으면 사용 (HOME만 movej 허용)
         self.goJ_home()
 
         self.gripper_open()
 
-        self.goL(pick_up)
-        self.goL(pick_down)
+        self.goL(P["PICK_UP"])
+        self.goL(P["PICK_DOWN"])
 
         self.gripper_close()
 
-        self.goL(pick_up)
-        self.goL(pour_ready)
+        self.goL(P["PICK_UP"])
+        self.goL(P["POUR_READY"])
 
-        print(f"✔ PICKUP done (tube_type={self.tube_type}). 이제 mix 코드는 별도로 실행.")
+        print(f"✔ PICKUP done (tube_type={self.tube_type})")
 
     # -------------------------------
-    # RETURN: 원위치 내려놓기 -> 위로 빠짐 -> home은 movej로 복귀
+    # RETURN: 원위치 내려놓기 -> 위로 빠짐 -> HOME 복귀(movej)
     # -------------------------------
     def return_flow(self):
         P = self.POSES[self.tube_type]
-        pick_up = P["PICK_UP"]
-        pick_down = P["PICK_DOWN"]
 
         # (현재 pour_ready 근처에서 시작한다고 가정)
-        self.goL(pick_up)
-        self.goL(pick_down)
+        self.goL(P["PICK_UP"])
+        self.goL(P["PICK_DOWN"])
 
         self.gripper_open()
         self.wait(2.0)
 
-        self.goL(pick_up)
+        self.goL(P["PICK_UP"])
 
-        # home 복귀는 조인트로
+        # HOME만 movej
         self.goJ_home()
 
-        print(f"✔ RETURN done (tube_type={self.tube_type}). home(movej) 복귀 완료.")
+        print(f"✔ RETURN done (tube_type={self.tube_type})")
 
     def execute(self):
         if self.mode == "PICKUP":
@@ -177,15 +161,17 @@ class TaskTransfer(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = None
+
+    ROBOT_ID = "dsr01"
+    node = rclpy.create_node("task_transfer", namespace=ROBOT_ID)
+
     try:
-        node = TaskTransfer()
-        node.execute()
+        task = TaskTransfer(node)
+        task.execute()
     except Exception as e:
         print(f"[ERROR] {e}")
     finally:
-        if node is not None:
-            node.destroy_node()
+        node.destroy_node()
         rclpy.shutdown()
 
 
