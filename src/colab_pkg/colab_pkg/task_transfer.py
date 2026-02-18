@@ -2,79 +2,68 @@
 import time
 import rclpy
 import DR_init
+from rclpy.node import Node
+
+from colab_interfaces.srv import RobotCommand  # 너희 srv 사용
+
 
 # ===============================
-# 개발용 분기 (추후 RobotCommand.srv Request로 교체)
-# ===============================
-MODE = "PICKUP"        # "PICKUP" or "RETURN"
-TUBE_TYPE = "SMALL"    # "SMALL" or "LARGE"
-
 # movel 속도/가속
+# ===============================
 L_VEL, L_ACC = 150, 150
-
-# movej 속도/가속 (HOME 복귀용)
-J_VEL, J_ACC = 30, 30
 
 # 그리퍼 DO
 DO_OPEN = 1
 DO_CLOSE = 2
 
 
-class TaskTransfer:
-    def __init__(self, node):
+class TaskTransfer(Node):
+    """
+    Flowchart 기반 TaskTransfer (Service Server)
+
+    - 로봇 연결(DSR_ROBOT2 바인딩)
+    - 서비스 요청 대기: /dsr01/robot_command
+    - request.mode에 따라 PICKUP / RETURN 수행
+
+    좌표 매핑(네가 준 값):
+      PICKUP:  Approach(PICK_UP) -> Insert(PICK_DOWN) -> Grip -> Lift(PICK_UP) -> Beaker(POUR_READY)
+      RETURN:  RackTop(PICK_UP)  -> Place(PICK_DOWN)  -> Open -> Retract(PICK_UP)
+    """
+
+    def __init__(self):
         # ===============================
-        # 0) 로봇 기본 설정
+        # 0) ROS/DSR 기본 설정
         # ===============================
         self.ROBOT_ID = "dsr01"
         self.ROBOT_MODEL = "m0609"
+        super().__init__("task_transfer", namespace=self.ROBOT_ID)
+
         DR_init.__dsr__id = self.ROBOT_ID
         DR_init.__dsr__model = self.ROBOT_MODEL
-        DR_init.__dsr__node = node  # ✅ create_node로 만든 node
+        DR_init.__dsr__node = self
 
-        # ✅ node 세팅 이후 import (중요)
+        # ===============================
+        # 1) DSR 바인딩
+        # ===============================
         from DSR_ROBOT2 import (
-            movel, posx,
-            movej, posj,
-            wait,
+            movel, posx, wait,
             set_robot_mode, ROBOT_MODE_AUTONOMOUS,
             set_digital_output,
             DR_BASE
         )
-
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
-        # ===============================
-        # 1) 바인딩
-        # ===============================
         self.movel = movel
         self.posx = posx
-        self.movej = movej
-        self.posj = posj
         self.wait = wait
         self.set_digital_output = set_digital_output
-
         self.REF = DR_BASE
+
         self.L_VEL, self.L_ACC = L_VEL, L_ACC
-        self.J_VEL, self.J_ACC = J_VEL, J_ACC
+        self._busy = False
 
         # ===============================
-        # 2) 모드/대상
-        # ===============================
-        self.mode = (MODE or "").strip().upper()
-        self.tube_type = (TUBE_TYPE or "").strip().upper()
-
-        if self.mode not in ("PICKUP", "RETURN"):
-            raise ValueError(f"MODE must be PICKUP or RETURN, got: {MODE}")
-        if self.tube_type not in ("SMALL", "LARGE"):
-            raise ValueError(f"TUBE_TYPE must be SMALL or LARGE, got: {TUBE_TYPE}")
-
-        # ===============================
-        # 3) HOME(ready) - 조인트 좌표계 (HOME만 movej)
-        # ===============================
-        self.ready_j = self.posj(0, 0, 90.0, 0, 90.0, 0)
-
-        # ===============================
-        # 4) 작업 좌표(posx) - SMALL/LARGE
+        # 2) 네가 준 좌표 그대로 (posx)
         # ===============================
         self.POSES = {
             "SMALL": {
@@ -88,6 +77,12 @@ class TaskTransfer:
                 "POUR_READY": self.posx(585.440, 157.760, 242.631, 91.920, 97.360, 88.550),
             }
         }
+
+        # ===============================
+        # 3) 서비스 서버 (서비스 요청 받는가?)
+        # ===============================
+        self.srv = self.create_service(RobotCommand, "robot_command", self._on_command)
+        self.get_logger().info("TaskTransfer ready. Service: /dsr01/robot_command")
 
     # -------------------------------
     # gripper
@@ -103,73 +98,107 @@ class TaskTransfer:
         time.sleep(0.4)
 
     # -------------------------------
-    # motion
+    # motion (movel only)
     # -------------------------------
-    def goL(self, p):  # movel only (작업 이동 전부 직선)
+    def goL(self, p):
         self.movel(p, vel=self.L_VEL, acc=self.L_ACC, ref=self.REF)
 
-    def goJ_home(self):  # HOME만 movej
-        self.movej(self.ready_j, vel=self.J_VEL, acc=self.J_ACC)
-
     # -------------------------------
-    # PICKUP: 집고 비커 앞 위치로 이동
+    # Flowchart: PICKUP
     # -------------------------------
-    def pickup_flow(self):
-        P = self.POSES[self.tube_type]
-
-        # 시작을 HOME에서 하고 싶으면 사용 (HOME만 movej 허용)
-        self.goJ_home()
+    def pickup_flow(self, tube_type: str):
+        P = self.POSES[tube_type]
+        approach = P["PICK_UP"]     # 시험관 위치 접근(Approach)
+        insert   = P["PICK_DOWN"]   # 파지 위치 이동(Insert)
+        lift     = P["PICK_UP"]     # 시험관 뽑기(Lift) = 다시 위로
+        beaker   = P["POUR_READY"]  # 비커 위치로 이동
 
         self.gripper_open()
 
-        self.goL(P["PICK_UP"])
-        self.goL(P["PICK_DOWN"])
+        self.goL(approach)
+        self.goL(insert)
 
         self.gripper_close()
 
-        self.goL(P["PICK_UP"])
-        self.goL(P["POUR_READY"])
-
-        print(f"✔ PICKUP done (tube_type={self.tube_type})")
+        self.goL(lift)
+        self.goL(beaker)
 
     # -------------------------------
-    # RETURN: 원위치 내려놓기 -> 위로 빠짐 -> HOME 복귀(movej)
+    # Flowchart: RETURN
     # -------------------------------
-    def return_flow(self):
-        P = self.POSES[self.tube_type]
+    def return_flow(self, tube_type: str):
+        P = self.POSES[tube_type]
+        rack_top = P["PICK_UP"]     # 랙 상단 위치로 이동 (좌표 없어서 PICK_UP으로 대체)
+        place    = P["PICK_DOWN"]   # 시험관 꽂기(Place)
+        retract  = P["PICK_UP"]     # 랙 상단 위치로 이동(Retract)
 
-        # (현재 pour_ready 근처에서 시작한다고 가정)
-        self.goL(P["PICK_UP"])
-        self.goL(P["PICK_DOWN"])
+        self.goL(rack_top)
+        self.goL(place)
 
         self.gripper_open()
-        self.wait(2.0)
+        self.wait(0.5)
 
-        self.goL(P["PICK_UP"])
+        self.goL(retract)
 
-        # HOME만 movej
-        self.goJ_home()
+    # -------------------------------
+    # service callback
+    # -------------------------------
+    def _on_command(self, request, response):
+        """
+        RobotCommand.srv 가정:
+          string mode      # "PICKUP" or "RETURN"
+          string tube_type # "SMALL" or "LARGE"
+          ---
+          bool success
+          string message
+        """
+        if self._busy:
+            response.success = False
+            response.message = "BUSY"
+            return response
 
-        print(f"✔ RETURN done (tube_type={self.tube_type})")
+        self._busy = True
+        try:
+            mode = (getattr(request, "mode", "") or "").strip().upper()
+            tube_type = (getattr(request, "tube_type", "") or "").strip().upper()
 
-    def execute(self):
-        if self.mode == "PICKUP":
-            self.pickup_flow()
-        else:
-            self.return_flow()
+            if tube_type not in ("SMALL", "LARGE"):
+                response.success = False
+                response.message = f"INVALID_TUBE_TYPE: {tube_type}"
+                return response
+
+            if mode == "PICKUP":
+                self.get_logger().info(f"Command PICKUP ({tube_type})")
+                self.pickup_flow(tube_type)
+                response.success = True
+                response.message = "PICKUP_DONE"
+
+            elif mode == "RETURN":
+                self.get_logger().info(f"Command RETURN ({tube_type})")
+                self.return_flow(tube_type)
+                response.success = True
+                response.message = "RETURN_DONE"
+
+            else:
+                response.success = False
+                response.message = f"INVALID_MODE: {mode}"
+
+        except Exception as e:
+            response.success = False
+            response.message = f"ERROR: {e}"
+        finally:
+            self._busy = False
+
+        return response
 
 
 def main(args=None):
     rclpy.init(args=args)
-
-    ROBOT_ID = "dsr01"
-    node = rclpy.create_node("task_transfer", namespace=ROBOT_ID)
-
+    node = TaskTransfer()
     try:
-        task = TaskTransfer(node)
-        task.execute()
-    except Exception as e:
-        print(f"[ERROR] {e}")
+        rclpy.spin(node)  # 서비스 요청 대기
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
