@@ -2,6 +2,6 @@ build/
 log/
 install/
 test/
-colcon.env
 *.pyc
-colcon.env
+*.env
+*.json

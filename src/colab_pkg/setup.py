@@ -33,6 +33,7 @@ setup(
             'ctrl = colab_pkg.system_controller:main',
             'pour = colab_pkg.task_pouring:main',
             'scale = colab_pkg.scale_driver:main',
+            'transfer = colab_pkg.task_transfer:main',
             'test_scale = colab_pkg.scale_driver_test:main',
             'test_cli = colab_pkg.test_cli_servers:main',
 
