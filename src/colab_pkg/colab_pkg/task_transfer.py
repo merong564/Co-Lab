@@ -123,15 +123,18 @@ def perform_task(mode, tube_type):
     # 안전한 초기 자세 (Joint)
     J_READY = [0, 0, 90, 0, 90, 0]
 
-    def gripper(action):
-        if action == "OPEN":
-            set_digital_output(DO_CLOSE, 0)
-            set_digital_output(DO_OPEN, 1)
-            wait(0.5)
-        elif action == "CLOSE":
-            set_digital_output(DO_OPEN, 0)
-            set_digital_output(DO_CLOSE, 1)
-            wait(0.5)
+    # 디지털 출력 상태
+    ON, OFF = 1, 0
+
+    def gripper_open():
+        set_digital_output(2, ON)
+        set_digital_output(1, OFF)
+        wait(2.0)
+
+    def gripper_close():
+        set_digital_output(1, ON)
+        set_digital_output(2, OFF)
+        wait(2.0)
 
     try:
         P = POSES[tube_type]
@@ -146,12 +149,12 @@ def perform_task(mode, tube_type):
             print(f"[Action] PICKUP Start ({tube_type})")
             movej(J_READY, vel=VEL, acc=ACC)
             wait(0.5)
-            gripper("OPEN")
+            gripper_open()
             
             # sync=True는 기본값이지만 명시적으로 확인
             movel(P["PICK_UP"],   vel=VEL, acc=ACC, ref=DR_BASE)
             movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
-            gripper("CLOSE")
+            gripper_close()
             movel(P["PICK_UP"],   vel=VEL, acc=ACC, ref=DR_BASE)
             movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
             print("[Action] PICKUP Done")
@@ -160,8 +163,7 @@ def perform_task(mode, tube_type):
             print(f"[Action] RETURN Start ({tube_type})")
             movel(P["PICK_UP"],   vel=VEL, acc=ACC, ref=DR_BASE)
             movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
-            gripper("OPEN")
-            wait(0.5)
+            gripper_open()
             movel(P["PICK_UP"],   vel=VEL, acc=ACC, ref=DR_BASE)
             
             # 복귀
