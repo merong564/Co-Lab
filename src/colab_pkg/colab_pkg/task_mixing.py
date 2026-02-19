@@ -81,32 +81,32 @@ def perform_task(mixing_duration=0.0):
 
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
-    J_VEL, J_ACC = 60, 60          
-    L_VEL, L_ACC = 60, 60          
+    J_VEL, J_ACC = 40, 40          
+    L_VEL, L_ACC = 100, 100          
 
-    DO_OPEN = 1
-    DO_CLOSE = 2
+    # 디지털 출력 상태
+    ON, OFF = 1, 0
 
     def gripper_open():
-        set_digital_output(DO_CLOSE, 0)
-        set_digital_output(DO_OPEN, 1)
+        set_digital_output(2, ON)
+        set_digital_output(1, OFF)
 
     def gripper_close():
-        set_digital_output(DO_OPEN, 0)
-        set_digital_output(DO_CLOSE, 1)
+        set_digital_output(1, ON)
+        set_digital_output(2, OFF)
 
     beaker_approach_j = posj(-17.561, 71.881, 35.950, 76.814, 105.046, -21.195)
     beaker_pick_j     = posj(-15.252, 70.070, 39.779, 77.202, 102.451, -22.726)
 
     gripper_open()
-    wait(0.2)
+    wait(2.0)
 
     movej(beaker_approach_j, vel=J_VEL, acc=J_ACC)
-    wait(0.5)
+    wait(2.0)
     movej(beaker_pick_j,     vel=J_VEL, acc=J_ACC)
 
     gripper_close()
-    wait(0.5)
+    wait(2.0)
 
     lift_j = posj(-15.228, 63.002, 32.623, 80.680, 105.138, -8.335)
     movej(lift_j, vel=J_VEL, acc=J_ACC)

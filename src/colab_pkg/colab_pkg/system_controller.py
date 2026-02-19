@@ -85,15 +85,15 @@ class SystemController(Node):
             if not await self.call_service(self.cli_pouring, mode="POUR", target_weight=request.target_weight):
                 raise Exception("Pouring Failed")
 
-            # 4. TaskMixing: Mixing
-            if self.check_stop(): raise Exception("Process Aborted by User")
-            if not await self.call_service(self.cli_mixing, mode="MIX", mixing_duration=request.mixing_duration):
-                raise Exception("Mixing Failed")
-
-            # 5. TaskTransfer: Return
+            # 4. TaskTransfer: Return
             if self.check_stop(): raise Exception("Process Aborted by User")
             if not await self.call_service(self.cli_transfer, mode="RETURN"):
                 raise Exception("Transfer Return Failed")
+            
+            # 5. TaskMixing: Mixing
+            if self.check_stop(): raise Exception("Process Aborted by User")
+            if not await self.call_service(self.cli_mixing, mode="MIX", mixing_duration=request.mixing_duration):
+                raise Exception("Mixing Failed")
 
             response.success = True
             response.message = "All tasks completed successfully."

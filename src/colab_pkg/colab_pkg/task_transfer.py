@@ -136,14 +136,16 @@ def perform_task(mode, tube_type):
     try:
         P = POSES[tube_type]
 
-        # [안전 장치] 작업 시작 전 movej로 관절을 풀어줌 (특이점 회피)
-        print(f" Moving to Ready Pose (J)")
-        movej(J_READY, vel=VEL, acc=ACC)
-        wait(0.5)
+        # # [안전 장치] 작업 시작 전 movej로 관절을 풀어줌 (특이점 회피)
+        # print(f" Moving to Ready Pose (J)")
+        # movej(J_READY, vel=VEL, acc=ACC)
+        # wait(0.5)
 
         # 작업 수행
         if mode == "PICKUP":
             print(f"[Action] PICKUP Start ({tube_type})")
+            movej(J_READY, vel=VEL, acc=ACC)
+            wait(0.5)
             gripper("OPEN")
             
             # sync=True는 기본값이지만 명시적으로 확인
