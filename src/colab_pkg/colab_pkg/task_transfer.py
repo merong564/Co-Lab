@@ -109,9 +109,10 @@ def get_poses(posx_func):
             "POUR_READY": posx_func(604.441, 157.760, 242.631, 91.920, 97.360, 88.550),
         },
         "LARGE": {
-            "PICK_DOWN": posx_func(306.636, -66.725,  89.141, 91.356, 91.786, 90.102),
+            "PICK_DOWN": posx_func(306.636, -66.725,  109.141, 91.356, 91.786, 90.102),
             "PICK_UP":   posx_func(306.636, -66.725, 257.898, 91.356, 91.786, 90.102),
-            "POUR_READY": posx_func(585.440, 157.760, 242.631, 91.920, 97.360, 88.550),
+            "POUR_UP": posx_func(585.440, 157.760, 242.631, 91.920, 97.360, 88.550),
+            "POUR_READY": posx_func(585.440, 157.760, 180.631, 91.920, 97.360, 88.550),
         }
     }
 
@@ -184,6 +185,9 @@ def perform_task(mode, tube_type):
 
             _check_stop("before movel PICK_UP(2)")
             movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
+            _check_stop("before movel PICK_UP(2)")
+            movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
             _check_stop("before movel POUR_READY")
             movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)

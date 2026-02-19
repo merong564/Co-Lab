@@ -126,7 +126,7 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
 
     print(f"[SYSTEM] Task Start! Target: {target_weight}g")
 
-    pour_ready_pos = posx(585.44, 157.76, 242.63, 91.92, 97.36, 88.55)
+    pour_ready_pos = posx(585.440, 157.760, 180.631, 91.920, 97.360, 88.550)
 
     # 시작 자세로 이동
     try:
