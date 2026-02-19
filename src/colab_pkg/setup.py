@@ -30,14 +30,16 @@ setup(
             'test_tilting = colab_pkg.tilting_test:main',
             'test_ui = colab_pkg.test_ui:main',
             'test_lc = colab_pkg.test_lc:main',
+            'test_scale = colab_pkg.scale_driver_test:main',
+            'test_cli = colab_pkg.test_cli_servers:main',
+            'ctrl_nm = colab_pkg.system_controller_no_mixing:main',     # 혼합 단계 없는 컨트롤러 (테스트용)
+            # 최종 테스트용 (모든 단계)
             'ctrl = colab_pkg.system_controller:main',
             'pour = colab_pkg.task_pouring:main',
             'scale = colab_pkg.scale_driver:main',
             'transfer = colab_pkg.task_transfer:main',
-            'test_scale = colab_pkg.scale_driver_test:main',
-            'test_cli = colab_pkg.test_cli_servers:main',
-            'ctrl_nm = colab_pkg.system_controller_no_mixing:main',     # 혼합 단계 없는 컨트롤러 (테스트용)
-
+            'mixing = colab_pkg.task_mixing:main',
+            
         ],
     },
 )
