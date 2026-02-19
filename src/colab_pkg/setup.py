@@ -36,6 +36,7 @@ setup(
             'transfer = colab_pkg.task_transfer:main',
             'test_scale = colab_pkg.scale_driver_test:main',
             'test_cli = colab_pkg.test_cli_servers:main',
+            'ctrl_nm = colab_pkg.system_controller_no_mixing:main',     # 혼합 단계 없는 컨트롤러 (테스트용)
 
         ],
     },

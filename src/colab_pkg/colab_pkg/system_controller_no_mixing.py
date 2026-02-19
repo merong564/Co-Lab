@@ -11,7 +11,7 @@ ROBOT_ID = "dsr01"
 
 class SystemController(Node):
     def __init__(self):
-        super().__init__('SystemController', namespace=ROBOT_ID)
+        super().__init__('system_controller_no_mixing', namespace=ROBOT_ID)
         
         self.callback_group = ReentrantCallbackGroup()
 
@@ -39,7 +39,7 @@ class SystemController(Node):
         self.cli_scale = self.create_client(RobotCommand, 'set_tare', callback_group=self.callback_group)
         self.cli_transfer = self.create_client(RobotCommand, 'execute_transfer', callback_group=self.callback_group)
         self.cli_pouring = self.create_client(RobotCommand, 'execute_pouring', callback_group=self.callback_group)
-        self.cli_mixing = self.create_client(RobotCommand, 'execute_mixing', callback_group=self.callback_group)
+        #self.cli_mixing = self.create_client(RobotCommand, 'execute_mixing', callback_group=self.callback_group)
         
         self.check_services_availability()
 
@@ -48,7 +48,7 @@ class SystemController(Node):
             ('ScaleDriver', self.cli_scale),
             ('TaskTransfer', self.cli_transfer),
             ('TaskPouring', self.cli_pouring),
-            ('TaskMixing', self.cli_mixing)
+            #('TaskMixing', self.cli_mixing)
         ]
         for name, client in clients:
             self.get_logger().info(f'Waiting for {name} server...')
@@ -86,9 +86,9 @@ class SystemController(Node):
                 raise Exception("Pouring Failed")
 
             # 4. TaskMixing: Mixing
-            if self.check_stop(): raise Exception("Process Aborted by User")
-            if not await self.call_service(self.cli_mixing, mode="MIX", mixing_duration=request.mixing_duration):
-                raise Exception("Mixing Failed")
+            # if self.check_stop(): raise Exception("Process Aborted by User")
+            # if not await self.call_service(self.cli_mixing, mode="MIX", mixing_duration=request.mixing_duration):
+            #     raise Exception("Mixing Failed")
 
             # 5. TaskTransfer: Return
             if self.check_stop(): raise Exception("Process Aborted by User")
