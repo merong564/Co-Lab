@@ -20,11 +20,17 @@ ROBOT_MODEL = "m0609"
 ROBOT_TOOL = "Tool Weight"
 ROBOT_TCP = "GripperDA_v1"
 
+NEW_TCP_NAME = "CustomTCP" # [추가] 새 TCP 이름
+NEW_TCP_OFFSET = [0.0, 0.0, 228.0, 0.0, 0.0, 0.0] # [추가] 새 TCP 오프셋 [X, Y, Z, Rx, Ry, Rz]
+
+FINGER_TCP_NAME = "FingerTCP" # [추가] 집게 끝단 기준 새 TCP 이름
+FINGER_TCP_OFFSET = [-32.0, 0.0, 228.0, 0.0, 0.0, 0.0] # [추가] 비커 쪽 집게 위치 오프셋 (실제 거리에 맞춰 Y 또는 X축 값 수정 필요)
+
 VELOCITY = 40
 ACC = 60
 P_GAIN = 0.03
 MAX_TILT_STEP = 3.0
-STOP_THRESHOLD = 40.0
+STOP_THRESHOLD = 10.0
 
 # ✅ STOP 신호 플래그 (STOP 토픽 받으면 True)
 STOP_REQUESTED = False
@@ -89,13 +95,8 @@ class TaskPouring(Node):
 # 3. 로봇 제어 로직 (DSR 라이브러리 사용)
 # ==========================================
 def initialize_robot():
-    from DSR_ROBOT2 import (
-        set_tool,
-        set_tcp,
-        set_robot_mode,
-        ROBOT_MODE_MANUAL,
-        ROBOT_MODE_AUTONOMOUS,
-    )
+    from DSR_ROBOT2 import (set_tool, set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS,)
+    from DSR_ROBOT2 import add_tcp # [추가] 새로운 TCP 등록을 위한 함수 임포트
 
     time.sleep(3.0)  # 노드 연결 대기(안전)
     try:
@@ -103,6 +104,13 @@ def initialize_robot():
         set_robot_mode(ROBOT_MODE_MANUAL)
         set_tool(ROBOT_TOOL)
         set_tcp(ROBOT_TCP)
+
+        add_tcp(NEW_TCP_NAME, NEW_TCP_OFFSET) # [추가] 신규 TCP 정의
+        set_tcp(NEW_TCP_NAME) # [추가] 정의된 신규 TCP로 변경
+
+        add_tcp(FINGER_TCP_NAME, FINGER_TCP_OFFSET) # [추가] 집게 끝단 TCP 정의
+        set_tcp(FINGER_TCP_NAME) # [추가] 회전 중심을 집게 끝단으로 변경
+
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
         print(f"✅ [Thread] Robot Initialized: {ROBOT_ID}")
     except Exception as e:
@@ -126,7 +134,7 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
 
     print(f"[SYSTEM] Task Start! Target: {target_weight}g")
 
-    pour_ready_pos = posx(585.440, 157.760, 180.631, 91.920, 97.360, 88.550)
+    pour_ready_pos = posx(585.440, 157.760, 160.631, 91.920, 97.360, 88.550)
 
     # 시작 자세로 이동
     try:
@@ -163,8 +171,10 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
             except Exception as e:
                 print(f"[ERROR] Return Move Failed: {e}")
                 return False
-
-            print(f"✅ [Done] Final: {current_weight:.1f}g (stop_target={stop_target:.1f}g)")
+            
+            time.sleep(3.0)
+            final_settled_weight = float(node.current_weight)
+            print(f"✅ [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
         delta, error = calculate_tilt_angle(current_weight, target_weight)
@@ -178,7 +188,11 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
             target_joints = list(current_joints)
             target_joints[5] += delta  # J6
 
-            movej(target_joints, vel=VELOCITY, acc=ACC)
+            # movej(target_joints, vel=VELOCITY, acc=ACC) # [기존 코드 주석 처리]
+            
+            rel_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, delta) # [추가] 툴 좌표계 기준 Z축 회전량(delta) 설정
+            movel(rel_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1) # [추가] ref=1(툴 좌표계), mod=1(상대 이동) 적용하여 직교 제어
+
             print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f}")
             time.sleep(0.1)
 
