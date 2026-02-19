@@ -16,8 +16,11 @@ import time
 import os  # [추가] 환경 변수 사용
 from dotenv import load_dotenv # [추가] .env 로드
 
+ROBOT_ID = "dsr01"
+
 # .env 파일 로드
-load_dotenv()
+env_path = os.path.expanduser('~/Co-Lab/.env')
+load_dotenv(dotenv_path=env_path)
 
 # 메시지 및 서비스 타입 임포트
 from sensor_msgs.msg import JointState
@@ -34,7 +37,7 @@ except ImportError:
 
 class UserInterface(Node):
     def __init__(self):
-        super().__init__('user_interface')
+        super().__init__('user_interface', namespace=ROBOT_ID)
         
         # 1. Firebase 초기화
         try:
@@ -57,16 +60,16 @@ class UserInterface(Node):
         if IMPORT_SUCCESS:
             # 2. [핵심 변경] Service Client 생성 (/start_process)
             # 역할: 로봇에게 작업을 시작하라고 '요청'하는 클라이언트
-            self.cli = self.create_client(RobotCommand, '/start_process')
+            self.cli = self.create_client(RobotCommand, 'start_process')
             
             # 3. 긴급 정지 Publisher (/stop)
             # 역할: 다이어그램에 나온 대로 긴급 정지는 Topic으로 발행
-            self.stop_pub = self.create_publisher(String, '/stop', 10)
+            self.stop_pub = self.create_publisher(String, 'stop', 10)
             
             # 4. Subscribers (Robot -> UI)
-            self.create_subscription(JointState, '/dsr01/joint_states', self.joint_callback, 10)
-            self.create_subscription(Float32, '/load_cell/weight', self.weight_callback, 10)
-            self.create_subscription(SystemStatus, '/system_status', self.system_status_callback, 10)
+            self.create_subscription(JointState, 'joint_states', self.joint_callback, 10)
+            self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10)
+            self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10)
         
         # 5. Timer & Variables
         self.timer = self.create_timer(0.1, self.loop_callback)
