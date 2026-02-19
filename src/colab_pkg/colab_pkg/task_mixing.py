@@ -39,11 +39,13 @@ class TaskMixing(Node):
 
     def execute_mixing_callback(self, request, response):
         mode = (getattr(request, "mode", "") or "").strip().upper()
+        # [추가] request에서 mixing_duration 추출
+        mixing_duration = float(getattr(request, "mixing_duration", 0.0))
 
-        self.get_logger().info(f"[Service] Request Received. Mode: {mode}")
+        self.get_logger().info(f"[Service] Request Received. Mode: {mode}, Duration: {mixing_duration}s")
         
-        # [수정] 불필요한 tube_type 파라미터 제거 및 mixing 전용 task 호출
-        perform_task()
+        # [추가] mixing_duration 파라미터 전달
+        perform_task(mixing_duration)
         
         response.success = True
         response.message = f"{mode} Mixing Completed"
@@ -66,8 +68,8 @@ def initialize_robot():
     print(f" Robot Initialized (Mode: {get_robot_mode()})")
     print("#" * 50)
 
-# [수정] 제공해주신 mixing 전용 로직으로 대체
-def perform_task():
+# [추가] 파라미터에 mixing_duration=0.0 기본값 지정
+def perform_task(mixing_duration=0.0):
     from DSR_ROBOT2 import (
         movej, movel,
         posj, posx,
@@ -122,16 +124,34 @@ def perform_task():
     movel(posx(cx + R, cy, cz, rx0, ry0, rz0),
           vel=L_VEL, acc=L_ACC, ref=REF, radius=0.0)
 
-    total_steps = TURNS * STEPS
-    for i in range(1, total_steps + 1):
-        th = 2.0 * math.pi * (i / STEPS)   
+    # [추가] mixing_duration 값에 따른 분기 처리 (기존 코드 유지)
+    if mixing_duration > 0.0:
+        start_time = time.time()
+        i = 1
+        while (time.time() - start_time) < mixing_duration:
+            th = 2.0 * math.pi * (i / STEPS)   
 
-        x = cx + R * math.cos(th)
-        y = cy + R * math.sin(th)
+            x = cx + R * math.cos(th)
+            y = cy + R * math.sin(th)
 
-        rad = 0.0 if i == total_steps else BLEND  
-        movel(posx(x, y, cz, rx0, ry0, rz0),
-              vel=L_VEL, acc=L_ACC, ref=REF, radius=rad)
+            movel(posx(x, y, cz, rx0, ry0, rz0),
+                  vel=L_VEL, acc=L_ACC, ref=REF, radius=BLEND)
+            i += 1
+            
+        # [추가] 지정된 시간 종료 후 현재 궤적에서 정지
+        movel(posx(cx + R, cy, cz, rx0, ry0, rz0),
+              vel=L_VEL, acc=L_ACC, ref=REF, radius=0.0)
+    else:
+        total_steps = TURNS * STEPS
+        for i in range(1, total_steps + 1):
+            th = 2.0 * math.pi * (i / STEPS)   
+
+            x = cx + R * math.cos(th)
+            y = cy + R * math.sin(th)
+
+            rad = 0.0 if i == total_steps else BLEND  
+            movel(posx(x, y, cz, rx0, ry0, rz0),
+                  vel=L_VEL, acc=L_ACC, ref=REF, radius=rad)
         
 # ===============================
 # 3. 메인
@@ -140,7 +160,7 @@ def main(args=None):
     rclpy.init(args=args)
 
     robot_node = rclpy.create_node("dsr_bridge_hidden", namespace=ROBOT_ID)
-    task_node = TaskMixing() # [수정] TaskMixing 노드로 변경
+    task_node = TaskMixing() 
 
     DR_init.__dsr__node = robot_node
 
