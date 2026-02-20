@@ -143,6 +143,26 @@
                             <span class="fw-bold text-primary"><span id="last_cycle_time">0.0</span>s</span>
                         </div>
                     </div>
+
+                    <div class="table-responsive mt-3 border rounded" style="max-height: 160px; overflow-y: auto;">
+                        <table class="table table-sm table-striped table-hover text-center mb-0" style="font-size: 0.8rem;">
+                            <thead class="table-light" style="position: sticky; top: 0; z-index: 1;">
+                                <tr>
+                                    <th>회차</th>
+                                    <th>목표 무게</th>
+                                    <th>결과 무게</th>
+                                    <th>오차율</th>
+                                    <th>작업률</th>
+                                    <th>사이클 타임</th>
+                                    <th>성공률(판정)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-tbody">
+                                <tr><td colspan="7" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
                 </div>
             </div>
         </div>
@@ -291,6 +311,15 @@
         const target = parseFloat(document.getElementById('target_weight').value || 1);
         document.getElementById('progress-bar').style.width = Math.min((weight / target) * 100, 100) + "%";
 
+        // [추가] 실험이 진행 중일 때만 CSV용 상세 데이터 누적
+        if (isRunning) {
+            experimentData.push({
+                time: ((currentTime - startTime) / 1000).toFixed(1),
+                weight: weight.toFixed(2),
+                flow: flowRate
+            });
+        }
+
         if (combinedChart.data.labels.length > 50) {
             combinedChart.data.labels.shift();
             combinedChart.data.datasets.forEach((dataset) => dataset.data.shift());
@@ -338,6 +367,40 @@
         }
     });
 
+    // 4. [추가] DB에 저장된 실험 히스토리(누적 데이터) 수신 및 테이블 렌더링
+    database.ref('experiment_history').on('value', (snapshot) => {
+        const tbody = document.getElementById('history-tbody');
+        if (!snapshot.exists()) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = ''; 
+        let records = [];
+        snapshot.forEach((child) => { records.push(child.val()); });
+        
+        // 최신 데이터가 위로 오도록 역순 출력
+        for(let i = records.length - 1; i >= 0; i--) {
+            const data = records[i];
+            const tr = document.createElement('tr');
+            
+            const successBadge = data.success 
+                ? '<span class="fw-bold text-success">100%</span>' 
+                : '<span class="fw-bold text-danger">실패</span>';
+                
+            tr.innerHTML = `
+                <td class="fw-bold">${i + 1}</td>
+                <td>${data.target_weight}g</td>
+                <td class="text-primary fw-bold">${data.final_weight}g</td>
+                <td class="${data.error_rate <= 2.0 ? 'text-success' : 'text-danger'} fw-bold">${data.error_rate}%</td>
+                <td>${data.work_rate || 100}%</td>
+                <td>${data.cycle_time}s</td>
+                <td>${successBadge}</td>
+            `;
+            tbody.appendChild(tr);
+        }
+    });
+
     function updatePhaseDisplay(newPhase) {
         if(currentPhase !== newPhase) {
             currentPhase = newPhase;
@@ -355,6 +418,11 @@
                 document.getElementById('step-Ready').classList.add('step-active');
                 badge.className = "badge bg-secondary phase-badge";
             }
+
+            // [추가] 작업이 모두 끝나고 Ready로 돌아오면 기록 중단
+            if(newPhase === "Ready") {
+                isRunning = false;
+            }
         }
     }
 
@@ -366,6 +434,12 @@
         
         if(confirm(`[${material}] 작업 시작?\n목표: ${target}g / 혼합: ${mixing}초`)) {
             resetData();
+            
+            // [추가] CSV 기록을 위한 상태 초기화
+            isRunning = true;
+            startTime = Date.now();
+            experimentData = []; 
+
             database.ref('commands').set({ 
                 type: "start_pouring", 
                 target_weight: target, 
@@ -406,6 +480,7 @@
             box.innerHTML = `[${time}] ${msg}<br>` + box.innerHTML;
         }
     }
+
     function exportToCSV() {
         if (experimentData.length === 0) { alert("저장할 데이터가 없습니다."); return; }
         let csvContent = "data:text/csv;charset=utf-8,Time(s),Weight(g),Flow(g/s)\r\n";
