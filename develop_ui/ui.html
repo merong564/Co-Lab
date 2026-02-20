@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Lab UI - 260220_v01</title>
+    <title>Smart Lab UI - Live Stopwatch</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -38,7 +38,7 @@
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h2 class="header-title"><i class="fas fa-flask text-primary"></i> Smart Lab User Interface</h2>
-            <p class="text-muted mb-0">SystemStatus Monitoring & Control (260220_v01)</p>
+            <p class="text-muted mb-0">SystemStatus Monitoring & Control</p>
         </div>
         
         <div class="card px-3 py-2 d-flex flex-row align-items-center mb-0">
@@ -84,6 +84,7 @@
                             </label>
                         </div>
                     </div>
+
                     <div class="row mb-3">
                         <div class="col-6">
                             <label class="form-label fw-bold">목표 무게 (g)</label>
@@ -277,7 +278,6 @@
         resetRobotInfo(); 
         offlineCheckInterval = setInterval(checkOfflineStatus, 1000);
         
-        // Progress Bar 초기화
         const progressBar = document.getElementById('progress-bar');
         if (progressBar) {
             progressBar.style.width = "0%";
@@ -317,7 +317,6 @@
         }
     }
 
-    // 1. 센서 데이터 수신
     database.ref('sensor_data').on('value', (snapshot) => {
         const d = snapshot.val();
         if(!d) return;
@@ -337,10 +336,14 @@
 
         document.getElementById('current_weight').innerText = weight.toFixed(1);
         document.getElementById('current_flow').innerText = flowRate.toFixed(1);
-
+        
+        // [핵심 변경 1] 작업 진행 중(isRunning)일 때만 실시간으로 시간을 계산해서 화면에 보여줍니다.
         if (isRunning) {
+            let elapsedTime = ((currentTime - startTime) / 1000).toFixed(1);
+            document.getElementById('last_cycle_time').innerText = elapsedTime; // 실시간 초시계 반영!
+
             experimentData.push({
-                time: ((currentTime - startTime) / 1000).toFixed(1),
+                time: elapsedTime,
                 weight: weight.toFixed(2),
                 flow: flowRate
             });
@@ -359,7 +362,6 @@
         lastTime = currentTime;
     });
 
-    // 2. 시스템 상태(SystemStatus) 수신
     database.ref('system_stats').on('value', (snapshot) => {
         const stats = snapshot.val();
         if(!stats) return;
@@ -378,10 +380,13 @@
         }
         
         if(stats.error_rate !== undefined) document.getElementById('error_rate').innerText = stats.error_rate;
-        if(stats.last_cycle_time !== undefined) document.getElementById('last_cycle_time').innerText = stats.last_cycle_time;
+        
+        // [핵심 변경 2] 작업이 완전히 종료(!isRunning)되었을 때만 파이썬에서 계산된 최종 사이클 타임으로 덮어씁니다.
+        if(stats.last_cycle_time !== undefined && !isRunning) { 
+            document.getElementById('last_cycle_time').innerText = stats.last_cycle_time;
+        }
     });
 
-    // 3. 로봇 상태 수신 (관절)
     database.ref('robot_status').on('value', (snapshot) => {
         const data = snapshot.val();
         if (!data) return;
@@ -393,7 +398,6 @@
         }
     });
 
-    // 4. DB에 저장된 실험 히스토리 수신 및 테이블 렌더링
     database.ref('experiment_history').on('value', (snapshot) => {
         const tbody = document.getElementById('history-tbody');
         if (!snapshot.exists()) {
@@ -403,9 +407,7 @@
 
         tbody.innerHTML = ''; 
         let records = [];
-        snapshot.forEach((child) => {
-            records.push(child.val());
-        });
+        snapshot.forEach((child) => { records.push(child.val()); });
         
         for(let i = records.length - 1; i >= 0; i--) {
             const data = records[i];
@@ -415,7 +417,6 @@
                 ? '<span class="badge bg-success">성공</span>' 
                 : '<span class="badge bg-danger">실패</span>';
                 
-            // [추가] 오차율 15% 허용 기준을 UI 글씨 색상에도 적용, 성공률 100/0% 출력
             const successRate = data.success_rate !== undefined ? data.success_rate : (data.success ? 100 : 0);
                 
             tr.innerHTML = `
@@ -449,7 +450,6 @@
                 badge.className = "badge bg-secondary phase-badge";
             }
 
-            // [추가] Phase에 따라 5단계로 차오르는 Progress Bar 로직
             let progressPct = 0;
             if (newPhase === "Ready") {
                 progressPct = (startTime === 0) ? 0 : 20; 
@@ -466,7 +466,7 @@
             }
 
             if(newPhase === "Ready") {
-                isRunning = false;
+                isRunning = false; // 작업 종료 시 플래그 끄기
             }
         }
     }
@@ -481,7 +481,7 @@
             resetData();
             
             isRunning = true;
-            startTime = Date.now();
+            startTime = Date.now(); // 작업 시작 시간 기록 (초시계용)
             experimentData = []; 
 
             database.ref('commands').set({ 
@@ -515,6 +515,8 @@
         combinedChart.update(); 
         document.getElementById('current_weight').innerText = "0.0"; 
         document.getElementById('current_flow').innerText = "0.0"; 
+        // 새 작업 시작 시 사이클 타임 화면 초기화
+        document.getElementById('last_cycle_time').innerText = "0.0"; 
     }
     
     function addLog(msg) {
