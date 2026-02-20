@@ -76,34 +76,37 @@ def perform_task(logger=None):
         set_digital_output(2, OFF)
         wait(2.0)
 
-    # 홈 (posj)  ✅ 초기화 후 여기로 먼저 이동
+    # 홈 (조인트 홈은 movej 유지)
     P0_HOME = posj(0, 0, 90, 0, 90, 0)
 
-    # 픽업 좌표 (posx)  ✅ 너 코드 그대로 유지
+    # 픽업 좌표 (posx) - 베이스 기준
     P_PICK_DOWN = posx(448.18, -180.31, 118.12, 110.37, -179.05, 110.13)
     P_PICK_UP   = posx(448.58, -179.86, 207.30, 104.66, -179.86, 104.49)
 
-    # ✅ 비커 넣기 전/후 조인트 좌표
-    BEAKER_BEFORE_J = posj(10.61, -0.20, 79.78, 178.91, -98.90, 62.01)
-    BEAKER_AFTER_J  = posj(10.61,  1.40, 99.77, 178.91, -79.40, 62.02)
+
+    # ✅ 너가 준 "테스크(posx, DR_BASE 기준)"으로 교체할 자리
+    # 지금은 아직 안 줘서 placeholder. 받는 즉시 여기만 바꿔주면 됨.
+    BEAKER_AFTER_X = posx(340.96, 84.35, 136.51, 26.49, -179.49, 26.20)  # TODO: 너가 줄 BEFORE 테스크 좌표
+    BEAKER_BEFORE_X  = posx(340.96, 84.35, 276.83, 26.49, -179.49, 26.20)  # TODO: 너가 줄 AFTER  테스크 좌표
 
     # =========================
-    # 비커 삽입: BEFORE->AFTER를 끝까지 분할 movej로 천천히 이동
-    # - 트리거 없으면: AFTER까지 갔다가 -> BEFORE -> HOME
-    # - 트리거 있으면: "트리거 순간부터" 회전하면서 내려가서 AFTER 도달,
-    #                 트리거 시점 기준 총 7초가 찰 때까지 계속 회전 -> BEFORE -> HOME
+    # 비커 삽입: BEFORE_X -> AFTER_X
+    # - 분할 movel로 천천히 접근
+    # - force 트리거 걸리면: 그 순간부터 compliance + periodic
+    # - AFTER 도달 후: 트리거 시점 기준 extra_spin_sec까지 periodic 유지
     # =========================
     def beaker_insert_flow(
-        before_j,
-        after_j,
+        before_x,
+        after_x,
         fz_trigger=4.5,
-        j_vel_slow=10, j_acc_slow=10,
+        vel_slow=30, acc_slow=30,
         steps=80,
-        amp_rz_deg=33.0,     # 18 + 15
+        amp_rz_deg=60.0,
         amp_z_mm=-2.0,
         period=1.0,
-        extra_spin_sec=7.0
+        extra_spin_sec=20.0
     ) -> bool:
+
         def _safe_get_fz():
             ret = get_tool_force(DR_TOOL)
             f = ret[0] if isinstance(ret, tuple) else ret
@@ -111,31 +114,32 @@ def perform_task(logger=None):
                 return abs(float(f[2]))
             return None
 
-        # 보간용 조인트 값(요청 고정)
-        b = [10.61, -0.20, 79.78, 178.91, -98.90, 62.01]
-        a = [10.61,  1.40, 99.77, 178.91, -79.40, 62.02]
+        # posx 보간용 6값 추출
+        try:
+            b = [before_x[0], before_x[1], before_x[2], before_x[3], before_x[4], before_x[5]]
+            a = [after_x[0],  after_x[1],  after_x[2],  after_x[3],  after_x[4],  after_x[5]]
+        except Exception:
+            log("[ERR] posx 인덱싱 불가. (환경에 따라 posx가 list처럼 안 될 수 있음)")
+            raise
 
         # 1) BEFORE 정렬
-        movej(before_j, vel=j_vel_slow, acc=j_acc_slow)
+        movel(before_x, vel=vel_slow, acc=acc_slow, ref=DR_BASE)
         wait(0.2)
 
         triggered = False
         trig_t0 = None
         compliance_on = False
 
-        # periodic 파라미터 (진폭)
         amp = [0, 0, amp_z_mm, 0, 0, amp_rz_deg]
 
         try:
-            # 2) BEFORE -> AFTER : 끝까지 "분할 movej"
+            # 2) BEFORE -> AFTER : 분할 movel
             for i in range(1, steps + 1):
                 t = i / float(steps)
-                j = [b[k] + (a[k] - b[k]) * t for k in range(6)]
+                x = [b[k] + (a[k] - b[k]) * t for k in range(6)]
 
-                # (a) 내려가기(movej)
-                movej(posj(*j), vel=j_vel_slow, acc=j_acc_slow)
+                movel(posx(*x), vel=vel_slow, acc=acc_slow, ref=DR_BASE)
 
-                # (b) 트리거 체크(아직 안 걸렸으면)
                 if not triggered:
                     fz = _safe_get_fz()
                     if fz is not None and fz >= fz_trigger:
@@ -143,23 +147,21 @@ def perform_task(logger=None):
                         trig_t0 = time.time()
                         log(f"[force] TRIGGERED at step {i}/{steps} (fz={fz:.2f} >= {fz_trigger})")
 
-                        # 트리거 순간부터 compliance + periodic 시작
                         task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
                         compliance_on = True
 
-                # (c) 트리거 이후: 내려가는 동안에도 계속 periodic을 이어붙여 수행
                 if triggered:
                     move_periodic(
                         amp=amp,
                         period=period,
                         atime=0.2,
-                        repeat=1,      # 한 사이클씩 계속 이어붙이기
+                        repeat=1,
                         ref=DR_TOOL
                     )
 
                 wait(0.05)
 
-            # 3) AFTER 도착 후: 트리거 시점부터 총 extra_spin_sec가 찰 때까지 계속 회전
+            # 3) AFTER 도착 후: 트리거 시점 기준 extra_spin_sec까지 유지
             if triggered and trig_t0 is not None:
                 while (time.time() - trig_t0) < extra_spin_sec:
                     move_periodic(
@@ -172,7 +174,6 @@ def perform_task(logger=None):
                     wait(0.05)
 
         finally:
-            # compliance는 트리거 된 경우에만 해제
             if compliance_on:
                 release_compliance_ctrl()
                 wait(0.2)
@@ -180,18 +181,13 @@ def perform_task(logger=None):
         return triggered
 
     # =========================
-    # ✅ 전체 흐름 (요청 반영)
-    # 0) 초기화 후 HOME 먼저
-    # 1) 픽업
-    # 2) 붓는 위치 이동(pour_up/pour_ready) 삭제
-    # 3) 바로 비커 삽입 흐름
-    # 4) (트리거 여부 상관없이) BEFORE -> HOME
+    # ✅ 전체 흐름
     # =========================
-    log("[0] Go HOME first")
+    log("[0] Go HOME first (movej)")
     movej(P0_HOME, vel=J_VEL, acc=J_ACC)
     wait(0.2)
 
-    log("[1] Pick: OPEN -> PICK_DOWN")
+    log("[1] Pick: OPEN -> PICK_DOWN (movel)")
     gripper_open()
     movel(P_PICK_DOWN, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     wait(0.2)
@@ -199,34 +195,45 @@ def perform_task(logger=None):
     log("[2] Pick: CLOSE")
     gripper_close()
 
-    log("[3] Pick: LIFT to PICK_UP")
+    log("[3] Pick: LIFT to PICK_UP (movel)")
     movel(P_PICK_UP, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     wait(0.2)
 
-    log("[4] Go BEAKER_BEFORE_J (directly, no pour positions)")
-    movej(BEAKER_BEFORE_J, vel=10, acc=10)
+    # ✅ BEAKER 접근도 "단순 이동=movel"로 통일
+    # (정렬 목적: 조인트 before로 먼저 맞추고 싶으면 movej로 1번 찍어도 되는데, 네 요청이 movel이라 movel로 감)
+    log("[4] Go BEAKER_BEFORE_X (movel, DR_BASE)")
+    movel(BEAKER_BEFORE_X, vel=30, acc=30, ref=DR_BASE)
     wait(0.2)
 
-    log("[5] Beaker insert: steady approach -> (if force) rotate while descending + until 7s total")
+    log("[5] Beaker insert (movel interpolation + force trigger + periodic)")
     triggered = beaker_insert_flow(
-        BEAKER_BEFORE_J,
-        BEAKER_AFTER_J,
+        BEAKER_BEFORE_X,
+        BEAKER_AFTER_X,
         fz_trigger=4.5,
-        j_vel_slow=10, j_acc_slow=10,
+        vel_slow=30, acc_slow=30,
         steps=80,
-        amp_rz_deg=33.0,
+        amp_rz_deg=60.0,
         amp_z_mm=-2.0,
         period=1.0,
-        extra_spin_sec=7.0
+        extra_spin_sec=20.0
     )
 
     if triggered:
-        log("[6] Triggered: return BEFORE -> HOME")
+        log("[6] Triggered: return BEFORE -> release")
     else:
-        log("[6] No force until AFTER: return BEFORE -> HOME")
+        log("[6] No force until AFTER: return BEFORE -> release")
 
-    movej(BEAKER_BEFORE_J, vel=10, acc=10)
+    movel(BEAKER_BEFORE_X, vel=30, acc=30, ref=DR_BASE)
     wait(0.2)
+
+    # ✅ 마무리: PICK_UP -> PICK_DOWN -> OPEN -> HOME
+    movel(P_PICK_UP, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    wait(0.2)
+
+    movel(P_PICK_DOWN, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    wait(0.2)
+
+    gripper_open()
 
     movej(P0_HOME, vel=J_VEL, acc=J_ACC)
     wait(0.2)
@@ -235,7 +242,7 @@ def perform_task(logger=None):
 
 
 # ===============================
-# 4. main: ros2 run 하면 즉시 1회 실행 후 종료
+# 4. main
 # ===============================
 def main(args=None):
     rclpy.init(args=args)
