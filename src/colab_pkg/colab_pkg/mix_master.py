@@ -80,8 +80,8 @@ def perform_task(logger=None):
     P0_HOME = posj(0, 0, 90, 0, 90, 0)
 
     # 픽업 좌표 (posx)  ✅ 너 코드 그대로 유지
-    P_PICK_DOWN = posx(306.636, -66.725, 109.141, 91.356, 91.786, 90.102)
-    P_PICK_UP   = posx(306.636, -66.725, 257.898, 91.356, 91.786, 90.102)
+    P_PICK_DOWN = posx(448.18, -180.31, 118.12, 110.37, -179.05, 110.13)
+    P_PICK_UP   = posx(448.58, -179.86, 207.30, 104.66, -179.86, 104.49)
 
     # ✅ 비커 넣기 전/후 조인트 좌표
     BEAKER_BEFORE_J = posj(10.61, -0.20, 79.78, 178.91, -98.90, 62.01)
@@ -90,7 +90,8 @@ def perform_task(logger=None):
     # =========================
     # 비커 삽입: BEFORE->AFTER를 끝까지 분할 movej로 천천히 이동
     # - 트리거 없으면: AFTER까지 갔다가 -> BEFORE -> HOME
-    # - 트리거 있으면: AFTER에서 7초 회전(각 33도) -> BEFORE -> HOME
+    # - 트리거 있으면: "트리거 순간부터" 회전하면서 내려가서 AFTER 도달,
+    #                 트리거 시점 기준 총 7초가 찰 때까지 계속 회전 -> BEFORE -> HOME
     # =========================
     def beaker_insert_flow(
         before_j,
@@ -119,38 +120,62 @@ def perform_task(logger=None):
         wait(0.2)
 
         triggered = False
+        trig_t0 = None
+        compliance_on = False
 
-        # 2) BEFORE -> AFTER : 끝까지 "분할 movej"로만 이동(급하강 방지)
-        for i in range(1, steps + 1):
-            t = i / float(steps)
-            j = [b[k] + (a[k] - b[k]) * t for k in range(6)]
-            movej(posj(*j), vel=j_vel_slow, acc=j_acc_slow)
-            wait(0.05)
+        # periodic 파라미터 (진폭)
+        amp = [0, 0, amp_z_mm, 0, 0, amp_rz_deg]
 
-            if not triggered:
-                fz = _safe_get_fz()
-                if fz is not None:
-                    if fz >= fz_trigger:
+        try:
+            # 2) BEFORE -> AFTER : 끝까지 "분할 movej"
+            for i in range(1, steps + 1):
+                t = i / float(steps)
+                j = [b[k] + (a[k] - b[k]) * t for k in range(6)]
+
+                # (a) 내려가기(movej)
+                movej(posj(*j), vel=j_vel_slow, acc=j_acc_slow)
+
+                # (b) 트리거 체크(아직 안 걸렸으면)
+                if not triggered:
+                    fz = _safe_get_fz()
+                    if fz is not None and fz >= fz_trigger:
                         triggered = True
+                        trig_t0 = time.time()
                         log(f"[force] TRIGGERED at step {i}/{steps} (fz={fz:.2f} >= {fz_trigger})")
 
-        # 3) 트리거가 있었으면 AFTER 도착 상태에서 7초 회전
-        if triggered:
-            task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
+                        # 트리거 순간부터 compliance + periodic 시작
+                        task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
+                        compliance_on = True
 
-            amp = [0, 0, amp_z_mm, 0, 0, amp_rz_deg]
-            repeat_extra = max(1, int(extra_spin_sec / max(0.1, period)))
+                # (c) 트리거 이후: 내려가는 동안에도 계속 periodic을 이어붙여 수행
+                if triggered:
+                    move_periodic(
+                        amp=amp,
+                        period=period,
+                        atime=0.2,
+                        repeat=1,      # 한 사이클씩 계속 이어붙이기
+                        ref=DR_TOOL
+                    )
 
-            move_periodic(
-                amp=amp,
-                period=period,
-                atime=0.2,
-                repeat=repeat_extra,
-                ref=DR_TOOL
-            )
+                wait(0.05)
 
-            release_compliance_ctrl()
-            wait(0.2)
+            # 3) AFTER 도착 후: 트리거 시점부터 총 extra_spin_sec가 찰 때까지 계속 회전
+            if triggered and trig_t0 is not None:
+                while (time.time() - trig_t0) < extra_spin_sec:
+                    move_periodic(
+                        amp=amp,
+                        period=period,
+                        atime=0.2,
+                        repeat=1,
+                        ref=DR_TOOL
+                    )
+                    wait(0.05)
+
+        finally:
+            # compliance는 트리거 된 경우에만 해제
+            if compliance_on:
+                release_compliance_ctrl()
+                wait(0.2)
 
         return triggered
 
@@ -182,7 +207,7 @@ def perform_task(logger=None):
     movej(BEAKER_BEFORE_J, vel=10, acc=10)
     wait(0.2)
 
-    log("[5] Beaker insert: steady approach -> (if force) 7s rotate")
+    log("[5] Beaker insert: steady approach -> (if force) rotate while descending + until 7s total")
     triggered = beaker_insert_flow(
         BEAKER_BEFORE_J,
         BEAKER_AFTER_J,
@@ -196,9 +221,9 @@ def perform_task(logger=None):
     )
 
     if triggered:
-        log("[6] Done rotate -> return BEFORE -> HOME")
+        log("[6] Triggered: return BEFORE -> HOME")
     else:
-        log("[6] No force until AFTER -> return BEFORE -> HOME")
+        log("[6] No force until AFTER: return BEFORE -> HOME")
 
     movej(BEAKER_BEFORE_J, vel=10, acc=10)
     wait(0.2)
