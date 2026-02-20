@@ -185,6 +185,17 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
     time.sleep(0.5)
 
     global STOP_REQUESTED
+    global P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD # [추가] 전역 변수 선언
+
+    # [추가] 목표 무게에 따른 파라미터 분기
+    if target_weight < 100.0:
+        P_GAIN = 0.03
+        MAX_TILT_STEP = 3.0
+        STOP_THRESHOLD = 10.0
+    else:
+        P_GAIN = 0.01
+        MAX_TILT_STEP = 1.0
+        STOP_THRESHOLD = 20.0
 
     print(f"[SYSTEM] Task Start! Target: {target_weight}g")
 
