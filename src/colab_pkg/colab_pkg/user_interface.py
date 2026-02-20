@@ -4,7 +4,7 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260220_v02 (Water/Ethanol Support + History Archiving)
+[Version] 260220_v03 (Trigger Fixed: Save History on Service Success)
 [Description] Firebase 명령을 받아 /start_process 서비스를 호출하는 브릿지 및 결과 히스토리 DB 저장
 """
 
@@ -15,7 +15,7 @@ from firebase_admin import credentials, db
 import time
 import os
 from dotenv import load_dotenv
-import datetime  # DB 히스토리에 날짜/시간을 기록하기 위한 모듈
+import datetime
 
 ROBOT_ID = "dsr01"
 
@@ -76,10 +76,9 @@ class UserInterface(Node):
         self.latest_weight = 0.0
         self.latest_system_status = {}
 
-        # [추가] 실험 히스토리 저장을 위한 상태 변수
+        # 실험 히스토리 저장을 위한 상태 변수
         self.current_target_weight = 0.0
         self.current_material = "Unknown"
-        self.last_total_count = 0 
 
     def loop_callback(self):
         self.check_firebase_commands()
@@ -95,7 +94,6 @@ class UserInterface(Node):
                     self.last_command_timestamp = cmd_data['timestamp']
                     cmd_type = cmd_data.get('type', '')
 
-                    # [핵심 로직] start_pouring 명령이 오면 목표값과 재료를 기억해두고 서비스 호출
                     if cmd_type == 'start_pouring':
                         self.current_target_weight = float(cmd_data.get('target_weight', 0.0))
                         self.current_material = cmd_data.get('material', 'Unknown')
@@ -112,7 +110,6 @@ class UserInterface(Node):
             self.get_logger().error(f"Command Check Error: {e}")
 
     def call_service_start_process(self, cmd_data):
-        """ /start_process 서비스 호출 함수 """
         if not self.cli.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('⚠️ 서비스(/start_process) 연결 실패. 로봇 제어 노드가 켜져 있나요?')
             return
@@ -132,6 +129,9 @@ class UserInterface(Node):
             response = future.result()
             if response.success:
                 self.get_logger().info(f"✅ 서비스 성공: {response.message}")
+                
+                # [핵심 수정] 터미널에 성공이 뜨면 무조건 바로 히스토리를 DB에 저장합니다!
+                self.save_experiment_history()
             else:
                 self.get_logger().warn(f"❌ 서비스 실패: {response.message}")
         except Exception as e:
@@ -155,12 +155,7 @@ class UserInterface(Node):
             pass
 
     def system_status_callback(self, msg):
-        # [추가] 로봇 노드에서 작업 횟수(total_count)를 올렸다면 1사이클이 끝났다는 의미
-        if hasattr(self, 'last_total_count') and msg.total_count > self.last_total_count:
-            if self.last_total_count != 0: 
-                self.save_experiment_history(msg)
-            self.last_total_count = msg.total_count
-
+        # total_count에 의존하지 않도록 트리거 제거. 서비스 성공 시에만 저장됨.
         self.latest_system_status = {
             "phase": msg.phase,
             "tcp_vel": msg.tcp_vel,
@@ -172,19 +167,27 @@ class UserInterface(Node):
             "last_cycle_time": round(msg.last_cycle_time, 2)
         }
 
-    # [추가] 1사이클 실험 종료 시 DB에 히스토리를 영구 기록(Push)하는 함수
-    def save_experiment_history(self, msg):
+    # 1사이클 실험 종료 시 DB에 히스토리를 영구 기록(Push)하는 함수
+    def save_experiment_history(self):
         try:
+            # 1. 로봇이 오차율을 보내줬는지 확인하고, 없다면 현재 무게 기반으로 직접 계산하는 안전장치
+            error_rate = self.latest_system_status.get('error_rate', 0.0)
+            if error_rate == 0.0 and self.current_target_weight > 0:
+                error_g = abs(self.latest_weight - self.current_target_weight)
+                error_rate = round((error_g / self.current_target_weight) * 100, 2)
+
+            cycle_time = self.latest_system_status.get('last_cycle_time', 0.0)
+
             history_data = {
                 'timestamp': int(time.time() * 1000),
                 'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'material': self.current_material,
                 'target_weight': self.current_target_weight,
                 'final_weight': round(self.latest_weight, 2),
-                'error_rate': round(msg.error_rate, 2),
-                'cycle_time': round(msg.last_cycle_time, 2),
+                'error_rate': error_rate,
+                'cycle_time': cycle_time,
                 'work_rate': 100, # 작업 완료이므로 100%
-                'success': True if msg.error_rate <= 2.0 else False
+                'success': True if error_rate <= 2.0 else False
             }
             db_ref = db.reference('experiment_history')
             new_record = db_ref.push(history_data)
