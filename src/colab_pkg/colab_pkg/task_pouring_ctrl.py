@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import time
 import threading
+import csv # [추가] CSV 로깅용 모듈 임포트
+import os # [추가] 파일 존재 여부 확인용 모듈 임포트
+from datetime import datetime # [추가] 실험 일시 기록용 모듈 임포트
 
 import rclpy
 from rclpy.node import Node
@@ -28,12 +31,57 @@ FINGER_TCP_OFFSET = [-32.0, 0.0, 228.0, 0.0, 0.0, 0.0] # [추가] 비커 쪽 집
 
 VELOCITY = 40
 ACC = 60
-P_GAIN = 0.03
-MAX_TILT_STEP = 3.0
-STOP_THRESHOLD = 10.0
+P_GAIN = 0.01
+MAX_TILT_STEP = 1.0
+STOP_THRESHOLD = 20.0
 
-# ✅ STOP 신호 플래그 (STOP 토픽 받으면 True)
+# STOP 신호 플래그 (STOP 토픽 받으면 True)
 STOP_REQUESTED = False
+
+# ==========================================
+# [추가] 정량 지표 계산 함수
+# ==========================================
+def calc_metrics(log_t, log_w, target_w, final_w):
+    if not log_w:
+        return
+    
+    max_w = max(log_w)
+    overshoot = max(0.0, max_w - target_w)
+    
+    rise_w = target_w * 0.9
+    rise_t = 0.0
+    for t, w in zip(log_t, log_w):
+        if w >= rise_w:
+            rise_t = t
+            break
+            
+    err_bound = target_w * 0.02
+    set_t = 0.0
+    for i in range(len(log_w)-1, -1, -1):
+        if abs(log_w[i] - target_w) > err_bound:
+            set_t = log_t[min(i+1, len(log_t)-1)]
+            break
+            
+    ss_err = abs(target_w - final_w)
+    
+    print("--- [Metrics] ---")
+    print(f"Overshoot: {overshoot:.2f} g")
+    print(f"Rise Time (90%): {rise_t:.2f} s")
+    print(f"Settling Time (2%): {set_t:.2f} s")
+    print(f"SS Error: {ss_err:.2f} g")
+    print("-----------------")
+
+    # [추가] 실험 메타데이터 및 정량 지표 CSV 저장 로직 시작
+    file_path = "pouring_metrics.csv" # [추가]
+    file_exists = os.path.isfile(file_path) # [추가]
+    
+    with open(file_path, mode='a', newline='') as f: # [추가]
+        writer = csv.writer(f) # [추가]
+        if not file_exists: # [추가] 헤더가 없을 경우 생성
+            writer.writerow(["Timestamp", "Target_W", "Final_W", "P_GAIN", "MAX_TILT_STEP", "STOP_THRESHOLD", "Overshoot", "Rise_Time", "Settling_Time", "SS_Error"]) # [추가]
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # [추가]
+        writer.writerow([timestamp, target_w, final_w, P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD, round(overshoot, 2), round(rise_t, 2), round(set_t, 2), round(ss_err, 2)]) # [추가]
 
 # ==========================================
 # 2. 통신 전담 노드 (서비스 & 토픽)
@@ -112,9 +160,9 @@ def initialize_robot():
         set_tcp(FINGER_TCP_NAME) # [추가] 회전 중심을 집게 끝단으로 변경
 
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-        print(f"✅ [Thread] Robot Initialized: {ROBOT_ID}")
+        print(f" [Thread] Robot Initialized: {ROBOT_ID}")
     except Exception as e:
-        print(f"❌ [Thread] Init Failed: {e}")
+        print(f" [Thread] Init Failed: {e}")
 
 def calculate_tilt_angle(current_w: float, target_w: float):
     error = target_w - current_w
@@ -140,6 +188,11 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
 
     print(f"[SYSTEM] Task Start! Target: {target_weight}g")
 
+    start_t = time.time() # [추가] 시작 시간 기록
+    log_t = [] # [추가] 경과 시간 로깅 리스트
+    log_w = [] # [추가] 현재 무게 로깅 리스트
+    log_d = [] # [추가] 제어 입력(delta) 로깅 리스트
+
     pour_ready_pos = posx(585.440, 157.760, 160.631, 91.920, 97.360, 88.550)
 
     # 시작 자세로 이동
@@ -159,7 +212,7 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
     stop_target = target_weight - STOP_THRESHOLD
 
     while rclpy.ok():
-        # ✅ STOP 들어오면: 자세 복귀 후 종료(노드 유지)
+        # STOP 들어오면: 자세 복귀 후 종료(노드 유지)
         if STOP_REQUESTED:
             try:
                 movel(pour_ready_pos, vel=150, acc=150)
@@ -169,11 +222,15 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
                 STOP_REQUESTED = False
                 return False
 
-            print("🟡 [STOP] Returned to ready pose. Finishing task.")
+            print(" [STOP] Returned to ready pose. Finishing task.")
             STOP_REQUESTED = False
             return True  # STOP을 '정상 종료'로 볼지 여부(원하면 False로)
 
         current_weight = float(node.current_weight)
+
+        cur_t = time.time() - start_t # [추가] 현재 경과 시간 계산
+        log_t.append(cur_t) # [추가] 시간 로깅
+        log_w.append(current_weight) # [추가] 무게 로깅
 
         # 목표 근처 도달하면 복귀 자세로 이동 후 종료
         if current_weight >= stop_target:
@@ -186,10 +243,14 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
             
             time.sleep(3.0)
             final_settled_weight = float(node.current_weight)
-            print(f"✅ [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
+            
+            calc_metrics(log_t, log_w, target_weight, final_settled_weight) # [추가] 정량 지표 계산 및 출력
+            
+            print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
         delta, error = calculate_tilt_angle(current_weight, target_weight)
+        log_d.append(delta) # [추가] 제어 입력 로깅
 
         try:
             # current_joints = get_current_posj()
@@ -206,7 +267,7 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
             movel(rel_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1) # [추가] ref=1(툴 좌표계), mod=1(상대 이동) 적용하여 직교 제어
 
             print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f}")
-            # time.sleep(0.1)
+            #time.sleep(0.1)
 
         except Exception as e:
             print(f"[ERROR] Tilt Move Failed: {e}")
