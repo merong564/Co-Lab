@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Lab UI - Live Stopwatch</title>
+    <title>Smart Lab UI - v08</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -30,6 +30,8 @@
         .light-green { background-color: #28a745; box-shadow: 0 0 8px #28a745; }
         .joint-val { font-size: 0.85rem; background: #e9ecef; padding: 4px 8px; border-radius: 6px; display: inline-block; width: 100%; text-align: center; font-family: monospace; }
         .phase-badge { font-size: 1.2rem; padding: 10px; width: 100%; display: block; margin-bottom: 10px; }
+        /* [추가] 오차율 뱃지 전용 스타일 */
+        .tolerance-badge { background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; vertical-align: middle; margin-left: 4px; font-weight: 800; }
     </style>
 </head>
 <body onload="initSystem()">
@@ -147,7 +149,7 @@
                             <span class="fw-bold"><span id="success_count">0</span> / <span id="total_count">0</span></span>
                         </div>
                         <div class="col-3 border-end">
-                            <small class="text-muted d-block" style="font-size:0.75rem">성공률</small>
+                            <small class="text-muted d-block" style="font-size:0.75rem">성공률 <span class="tolerance-badge">&plusmn;15%</span></small>
                             <span class="fw-bold text-success"><span id="success_rate">0</span>%</span>
                         </div>
                         <div class="col-3 border-end">
@@ -168,7 +170,7 @@
                                     <th>목표 무게</th>
                                     <th>결과 무게</th>
                                     <th>오차율</th>
-                                    <th>성공률</th>
+                                    <th>성공률 <span class="tolerance-badge" style="font-size: 0.55rem;">&plusmn;15%</span></th>
                                     <th>사이클 타임</th>
                                     <th>판정</th>
                                 </tr>
@@ -336,11 +338,10 @@
 
         document.getElementById('current_weight').innerText = weight.toFixed(1);
         document.getElementById('current_flow').innerText = flowRate.toFixed(1);
-        
-        // [핵심 변경 1] 작업 진행 중(isRunning)일 때만 실시간으로 시간을 계산해서 화면에 보여줍니다.
+
         if (isRunning) {
             let elapsedTime = ((currentTime - startTime) / 1000).toFixed(1);
-            document.getElementById('last_cycle_time').innerText = elapsedTime; // 실시간 초시계 반영!
+            document.getElementById('last_cycle_time').innerText = elapsedTime; 
 
             experimentData.push({
                 time: elapsedTime,
@@ -381,7 +382,6 @@
         
         if(stats.error_rate !== undefined) document.getElementById('error_rate').innerText = stats.error_rate;
         
-        // [핵심 변경 2] 작업이 완전히 종료(!isRunning)되었을 때만 파이썬에서 계산된 최종 사이클 타임으로 덮어씁니다.
         if(stats.last_cycle_time !== undefined && !isRunning) { 
             document.getElementById('last_cycle_time').innerText = stats.last_cycle_time;
         }
@@ -407,7 +407,9 @@
 
         tbody.innerHTML = ''; 
         let records = [];
-        snapshot.forEach((child) => { records.push(child.val()); });
+        snapshot.forEach((child) => {
+            records.push(child.val());
+        });
         
         for(let i = records.length - 1; i >= 0; i--) {
             const data = records[i];
@@ -466,7 +468,7 @@
             }
 
             if(newPhase === "Ready") {
-                isRunning = false; // 작업 종료 시 플래그 끄기
+                isRunning = false;
             }
         }
     }
@@ -481,7 +483,7 @@
             resetData();
             
             isRunning = true;
-            startTime = Date.now(); // 작업 시작 시간 기록 (초시계용)
+            startTime = Date.now();
             experimentData = []; 
 
             database.ref('commands').set({ 
@@ -515,7 +517,6 @@
         combinedChart.update(); 
         document.getElementById('current_weight').innerText = "0.0"; 
         document.getElementById('current_flow').innerText = "0.0"; 
-        // 새 작업 시작 시 사이클 타임 화면 초기화
         document.getElementById('last_cycle_time').innerText = "0.0"; 
     }
     
