@@ -86,7 +86,7 @@
                     </div>
                     <div class="row mb-3">
                         <div class="col-6">
-                            <label class="form-label fw-bold">목표 용량 (g)</label>
+                            <label class="form-label fw-bold">목표 무게 (g)</label>
                             <input type="number" id="target_weight" class="form-control text-center fw-bold" value="39" step="1">
                         </div>
                         <div class="col-6">
@@ -129,9 +129,6 @@
                             </div>
                         </div>
                     </div>
-                    <div class="progress mt-3" style="height: 10px; border-radius: 5px;">
-                        <div id="progress-bar" class="progress-bar bg-primary" role="progressbar" style="width: 0%"></div>
-                    </div>
                 </div>
             </div>
 
@@ -161,6 +158,26 @@
                             <span class="fw-bold text-primary"><span id="last_cycle_time">0.0</span>s</span>
                         </div>
                     </div>
+
+                    <div class="table-responsive mt-3 border rounded" style="max-height: 160px; overflow-y: auto;">
+                        <table class="table table-sm table-striped table-hover text-center mb-0" style="font-size: 0.8rem;">
+                            <thead class="table-light" style="position: sticky; top: 0; z-index: 1;">
+                                <tr>
+                                    <th>회차</th>
+                                    <th>목표 무게</th>
+                                    <th>결과 무게</th>
+                                    <th>오차율</th>
+                                    <th>성공률</th>
+                                    <th>사이클 타임</th>
+                                    <th>판정</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-tbody">
+                                <tr><td colspan="7" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
                 </div>
             </div>
         </div>
@@ -170,8 +187,12 @@
             
             <div class="card mb-3">
                 <div class="card-header bg-light"><i class="fas fa-sync-alt"></i> Cycle Phase</div>
-                <div class="card-body text-center p-3">
-                    <span id="phase-badge" class="badge bg-secondary phase-badge">Ready</span>
+                <div class="card-body text-center p-3 pb-2">
+                    <span id="phase-badge" class="badge bg-secondary phase-badge mb-2">Ready</span>
+                    
+                    <div class="progress mb-2" style="height: 22px; border-radius: 5px;">
+                        <div id="progress-bar" class="progress-bar bg-primary fw-bold" role="progressbar" style="width: 0%; min-width: 40px; transition: width 0.5s ease-in-out; font-size: 0.9rem;">0%</div>
+                    </div>
                 </div>
                 <div class="step-container mb-0">
                     <div class="step-item step-active" id="step-Ready"><i class="fas fa-pause-circle step-icon"></i> <span class="step-time">대기</span></div>
@@ -255,6 +276,13 @@
         addLog("User Interface Initialized.");
         resetRobotInfo(); 
         offlineCheckInterval = setInterval(checkOfflineStatus, 1000);
+        
+        // Progress Bar 초기화
+        const progressBar = document.getElementById('progress-bar');
+        if (progressBar) {
+            progressBar.style.width = "0%";
+            progressBar.innerText = "0%";
+        }
     }
 
     function checkOfflineStatus() {
@@ -309,11 +337,7 @@
 
         document.getElementById('current_weight').innerText = weight.toFixed(1);
         document.getElementById('current_flow').innerText = flowRate.toFixed(1);
-        
-        const target = parseFloat(document.getElementById('target_weight').value || 1);
-        document.getElementById('progress-bar').style.width = Math.min((weight / target) * 100, 100) + "%";
 
-        // [추가] 실험이 진행 중일 때만 CSV용 상세 데이터 누적
         if (isRunning) {
             experimentData.push({
                 time: ((currentTime - startTime) / 1000).toFixed(1),
@@ -369,6 +393,44 @@
         }
     });
 
+    // 4. DB에 저장된 실험 히스토리 수신 및 테이블 렌더링
+    database.ref('experiment_history').on('value', (snapshot) => {
+        const tbody = document.getElementById('history-tbody');
+        if (!snapshot.exists()) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = ''; 
+        let records = [];
+        snapshot.forEach((child) => {
+            records.push(child.val());
+        });
+        
+        for(let i = records.length - 1; i >= 0; i--) {
+            const data = records[i];
+            const tr = document.createElement('tr');
+            
+            const successBadge = data.success 
+                ? '<span class="badge bg-success">성공</span>' 
+                : '<span class="badge bg-danger">실패</span>';
+                
+            // [추가] 오차율 15% 허용 기준을 UI 글씨 색상에도 적용, 성공률 100/0% 출력
+            const successRate = data.success_rate !== undefined ? data.success_rate : (data.success ? 100 : 0);
+                
+            tr.innerHTML = `
+                <td class="fw-bold">${i + 1}</td>
+                <td>${data.target_weight}g</td>
+                <td class="text-primary fw-bold">${data.final_weight}g</td>
+                <td class="${data.error_rate <= 15.0 ? 'text-success' : 'text-danger'} fw-bold">${data.error_rate}%</td>
+                <td class="${successRate === 100 ? 'text-success' : 'text-danger'} fw-bold">${successRate}%</td>
+                <td>${data.cycle_time}s</td>
+                <td>${successBadge}</td>
+            `;
+            tbody.appendChild(tr);
+        }
+    });
+
     function updatePhaseDisplay(newPhase) {
         if(currentPhase !== newPhase) {
             currentPhase = newPhase;
@@ -387,7 +449,22 @@
                 badge.className = "badge bg-secondary phase-badge";
             }
 
-            // [추가] 작업이 모두 끝나고 Ready로 돌아오면 기록 중단
+            // [추가] Phase에 따라 5단계로 차오르는 Progress Bar 로직
+            let progressPct = 0;
+            if (newPhase === "Ready") {
+                progressPct = (startTime === 0) ? 0 : 20; 
+            }
+            else if (newPhase === "Transfer") progressPct = 40;
+            else if (newPhase === "Pouring") progressPct = 60;
+            else if (newPhase === "Mixing") progressPct = 80;
+            else if (newPhase === "Return") progressPct = 100;
+            
+            const progressBar = document.getElementById('progress-bar');
+            if(progressBar) {
+                progressBar.style.width = progressPct + "%";
+                progressBar.innerText = progressPct + "%"; 
+            }
+
             if(newPhase === "Ready") {
                 isRunning = false;
             }
@@ -403,7 +480,6 @@
         if(confirm(`[${material}] 작업 시작?\n목표: ${target}g / 혼합: ${mixing}초`)) {
             resetData();
             
-            // [추가] CSV 기록을 위한 상태 초기화
             isRunning = true;
             startTime = Date.now();
             experimentData = []; 
