@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import time
 import rclpy
-from rclpy.node import Node
 import DR_init
 
 # ===============================
@@ -41,7 +40,7 @@ def initialize_robot():
 # ===============================
 # 3. 작업 수행 로직 (단독 실행)
 # ===============================
-def perform_task(mixing_duration=0.0, logger=None):
+def perform_task(logger=None):
     from DSR_ROBOT2 import (
         movej, movel,
         posj, posx,
@@ -77,40 +76,33 @@ def perform_task(mixing_duration=0.0, logger=None):
         set_digital_output(2, OFF)
         wait(2.0)
 
-    # 좌표 (posx)
-    P = {
-        "PICK_DOWN":  posx(306.636, -66.725, 109.141, 91.356, 91.786, 90.102),
-        "PICK_UP":    posx(306.636, -66.725, 257.898, 91.356, 91.786, 90.102),
-        "POUR_UP":    posx(585.440, 157.760, 242.631, 91.920, 97.360, 88.550),
-        "POUR_READY": posx(585.440, 157.760, 180.631, 91.920, 97.360, 88.550),
-    }
-
-    # 홈 (posj)
+    # 홈 (posj)  ✅ 초기화 후 여기로 먼저 이동
     P0_HOME = posj(0, 0, 90, 0, 90, 0)
+
+    # 픽업 좌표 (posx)  ✅ 너 코드 그대로 유지
+    P_PICK_DOWN = posx(306.636, -66.725, 109.141, 91.356, 91.786, 90.102)
+    P_PICK_UP   = posx(306.636, -66.725, 257.898, 91.356, 91.786, 90.102)
 
     # ✅ 비커 넣기 전/후 조인트 좌표
     BEAKER_BEFORE_J = posj(10.61, -0.20, 79.78, 178.91, -98.90, 62.01)
-    BEAKER_AFTER_J  = posj(10.61,  1.40, 99.77, 178.91, -79.40, 62.01)
+    BEAKER_AFTER_J  = posj(10.61,  1.40, 99.77, 178.91, -79.40, 62.02)
 
     # =========================
-    # ✅ 요청 동작:
-    # - BEFORE->AFTER 천천히 이동(분할 movej)
-    # - 내려가다가 외력(Fz) 감지되면 그 순간부터:
-    #     move_periodic(진폭 회전+Z진폭)로 섞으며 내려감
-    # - AFTER 조인트 도달 성공하면 3초 더 periodic 후 종료
+    # 비커 삽입: BEFORE->AFTER를 끝까지 분할 movej로 천천히 이동
+    # - 트리거 없으면: AFTER까지 갔다가 -> BEFORE -> HOME
+    # - 트리거 있으면: AFTER에서 7초 회전(각 33도) -> BEFORE -> HOME
     # =========================
-    def beaker_insert_with_force_trigger(
+    def beaker_insert_flow(
         before_j,
         after_j,
-        fz_trigger=3.0,          # 외력 감지 임계값(N)
+        fz_trigger=4.5,
         j_vel_slow=10, j_acc_slow=10,
-        steps=50,                # BEFORE->AFTER 분할수(클수록 천천히/부드럽게)
-        amp_rz_deg=18.0,         # 회전 진폭(좌우 흔들기)
-        amp_z_mm=-2.0,           # Z(툴) 진폭(살짝 눌러가며)
-        period=1.0,              # periodic 주기
-        extra_spin_sec=7.0,      # AFTER 도달 후 추가 섞기 시간
-        timeout_sec=12.0         # force가 안 들어와도 무한대기 방지
-    ):
+        steps=80,
+        amp_rz_deg=33.0,     # 18 + 15
+        amp_z_mm=-2.0,
+        period=1.0,
+        extra_spin_sec=7.0
+    ) -> bool:
         def _safe_get_fz():
             ret = get_tool_force(DR_TOOL)
             f = ret[0] if isinstance(ret, tuple) else ret
@@ -118,59 +110,37 @@ def perform_task(mixing_duration=0.0, logger=None):
                 return abs(float(f[2]))
             return None
 
-        # 숫자 배열로 보간할 before/after 조인트 값(요청값 고정)
+        # 보간용 조인트 값(요청 고정)
         b = [10.61, -0.20, 79.78, 178.91, -98.90, 62.01]
-        a = [10.61,  1.40, 99.77, 178.91, -79.40, 62.01]
+        a = [10.61,  1.40, 99.77, 178.91, -79.40, 62.02]
 
-        # 1) before로 천천히 정렬
+        # 1) BEFORE 정렬
         movej(before_j, vel=j_vel_slow, acc=j_acc_slow)
         wait(0.2)
 
         triggered = False
-        t0 = time.time()
 
-        # 2) BEFORE -> AFTER 천천히 내려가며 이동
+        # 2) BEFORE -> AFTER : 끝까지 "분할 movej"로만 이동(급하강 방지)
         for i in range(1, steps + 1):
             t = i / float(steps)
             j = [b[k] + (a[k] - b[k]) * t for k in range(6)]
             movej(posj(*j), vel=j_vel_slow, acc=j_acc_slow)
             wait(0.05)
 
-            fz = _safe_get_fz()
-            if fz is not None:
-                log(f"[force] fz={fz:.2f}")
-                if fz >= fz_trigger:
-                    triggered = True
-                    log(f"[force] TRIGGERED at fz={fz:.2f} (>= {fz_trigger})")
-                    break
-            else:
-                log("[force] invalid/empty")
+            if not triggered:
+                fz = _safe_get_fz()
+                if fz is not None:
+                    if fz >= fz_trigger:
+                        triggered = True
+                        log(f"[force] TRIGGERED at step {i}/{steps} (fz={fz:.2f} >= {fz_trigger})")
 
-            if (time.time() - t0) > timeout_sec:
-                log("[force] timeout while approaching -> continue without trigger")
-                break
-
-        # 3) 트리거 시: 순응 ON + periodic 섞기
+        # 3) 트리거가 있었으면 AFTER 도착 상태에서 7초 회전
         if triggered:
             task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
 
             amp = [0, 0, amp_z_mm, 0, 0, amp_rz_deg]
-
-            # 트리거 직후 섞기 조금
-            move_periodic(
-                amp=amp,
-                period=period,
-                atime=0.2,
-                repeat=3,
-                ref=DR_TOOL
-            )
-
-            # AFTER 조인트로 천천히 "도달" (성공 조건)
-            movej(after_j, vel=j_vel_slow, acc=j_acc_slow)
-            wait(0.2)
-
-            # AFTER 도달 후 3초 더 섞기(진폭 회전)
             repeat_extra = max(1, int(extra_spin_sec / max(0.1, period)))
+
             move_periodic(
                 amp=amp,
                 period=period,
@@ -182,72 +152,61 @@ def perform_task(mixing_duration=0.0, logger=None):
             release_compliance_ctrl()
             wait(0.2)
 
-        else:
-            # 트리거 못 걸면 그냥 AFTER로 이동만
-            movej(after_j, vel=j_vel_slow, acc=j_acc_slow)
-            wait(0.2)
+        return triggered
 
     # =========================
-    # 시퀀스
+    # ✅ 전체 흐름 (요청 반영)
+    # 0) 초기화 후 HOME 먼저
+    # 1) 픽업
+    # 2) 붓는 위치 이동(pour_up/pour_ready) 삭제
+    # 3) 바로 비커 삽입 흐름
+    # 4) (트리거 여부 상관없이) BEFORE -> HOME
     # =========================
-    # log("[1] Go PICK_DOWN")
-    # gripper_open()
-    # movel(P["PICK_DOWN"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    # wait(0.2)
+    log("[0] Go HOME first")
+    movej(P0_HOME, vel=J_VEL, acc=J_ACC)
+    wait(0.2)
 
-    # log("[2] Gripper CLOSE (pick)")
-    # gripper_close()
+    log("[1] Pick: OPEN -> PICK_DOWN")
+    gripper_open()
+    movel(P_PICK_DOWN, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    wait(0.2)
 
-    # log("[3] Go PICK_UP (lift)")
-    # movel(P["PICK_UP"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    # wait(0.2)
+    log("[2] Pick: CLOSE")
+    gripper_close()
 
-    # log("[4] Go POUR_UP (move)")
-    # movel(P["POUR_UP"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    # wait(0.2)
+    log("[3] Pick: LIFT to PICK_UP")
+    movel(P_PICK_UP, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    wait(0.2)
 
-    # log("[5] Go POUR_READY (down)")
-    # movel(P["POUR_READY"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    # wait(0.2)
+    log("[4] Go BEAKER_BEFORE_J (directly, no pour positions)")
+    movej(BEAKER_BEFORE_J, vel=10, acc=10)
+    wait(0.2)
 
-    # ✅ 여기서 "외력 감지 후 periodic 섞기" 수행
-    log("[6] Beaker insert: slow approach -> force trigger -> periodic mix -> reach AFTER -> +3s mix")
-    beaker_insert_with_force_trigger(
+    log("[5] Beaker insert: steady approach -> (if force) 7s rotate")
+    triggered = beaker_insert_flow(
         BEAKER_BEFORE_J,
         BEAKER_AFTER_J,
         fz_trigger=4.5,
         j_vel_slow=10, j_acc_slow=10,
-        steps=50,
-        amp_rz_deg=18.0,
+        steps=80,
+        amp_rz_deg=33.0,
         amp_z_mm=-2.0,
         period=1.0,
-        extra_spin_sec=3.0,
-        timeout_sec=12.0
+        extra_spin_sec=7.0
     )
 
-    # =========================
-    # 이후 복귀 시퀀스 유지
-    # =========================
-    # log("[7] Return to POUR_UP (safe lift before moving back)")
-    # movel(P["POUR_UP"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    # wait(0.2)
+    if triggered:
+        log("[6] Done rotate -> return BEFORE -> HOME")
+    else:
+        log("[6] No force until AFTER -> return BEFORE -> HOME")
 
-    # log("[8] Move back to PICK_UP (safe height at pick area)")
-    # movel(P["PICK_UP"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    # wait(0.2)
+    movej(BEAKER_BEFORE_J, vel=10, acc=10)
+    wait(0.2)
 
-    # log("[9] Go PICK_DOWN (place back)")
-    # movel(P["PICK_DOWN"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    # wait(0.2)
+    movej(P0_HOME, vel=J_VEL, acc=J_ACC)
+    wait(0.2)
 
-    # log("[10] Gripper OPEN (release at original place)")
-    # gripper_open()
-
-    # log("[11] Return HOME")
-    # movej(P0_HOME, vel=J_VEL, acc=J_ACC)
-    # wait(0.2)
-
-    # log("종료")
+    log("종료")
 
 
 # ===============================
@@ -261,7 +220,7 @@ def main(args=None):
 
     try:
         initialize_robot()
-        perform_task(mixing_duration=0.0, logger=node.get_logger())
+        perform_task(logger=node.get_logger())
     except KeyboardInterrupt:
         pass
     finally:
