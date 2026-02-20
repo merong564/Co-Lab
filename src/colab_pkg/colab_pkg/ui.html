@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Lab UI - 260220_v03</title>
+    <title>Smart Lab UI - 260220_v05</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -111,9 +111,11 @@
                             </div>
                         </div>
                     </div>
-                    <div class="progress mt-3" style="height: 10px; border-radius: 5px;">
-                        <div id="progress-bar" class="progress-bar bg-primary" role="progressbar" style="width: 0%"></div>
+                    
+                    <div class="progress mt-3" style="height: 22px; border-radius: 5px;">
+                        <div id="progress-bar" class="progress-bar bg-primary fw-bold" role="progressbar" style="width: 0%; min-width: 40px; transition: width 0.5s ease-in-out; font-size: 0.9rem;">0%</div>
                     </div>
+                    
                 </div>
             </div>
 
@@ -152,9 +154,9 @@
                                     <th>목표 무게</th>
                                     <th>결과 무게</th>
                                     <th>오차율</th>
-                                    <th>작업률</th>
+                                    <th>성공률</th>
                                     <th>사이클 타임</th>
-                                    <th>성공률(판정)</th>
+                                    <th>판정</th>
                                 </tr>
                             </thead>
                             <tbody id="history-tbody">
@@ -253,6 +255,12 @@
         addLog("User Interface Initialized.");
         resetRobotInfo(); 
         offlineCheckInterval = setInterval(checkOfflineStatus, 1000);
+        
+        const progressBar = document.getElementById('progress-bar');
+        if (progressBar) {
+            progressBar.style.width = "0%";
+            progressBar.innerText = "0%";
+        }
     }
 
     function checkOfflineStatus() {
@@ -287,7 +295,6 @@
         }
     }
 
-    // 1. 센서 데이터 수신
     database.ref('sensor_data').on('value', (snapshot) => {
         const d = snapshot.val();
         if(!d) return;
@@ -308,10 +315,6 @@
         document.getElementById('current_weight').innerText = weight.toFixed(1);
         document.getElementById('current_flow').innerText = flowRate.toFixed(1);
         
-        const target = parseFloat(document.getElementById('target_weight').value || 1);
-        document.getElementById('progress-bar').style.width = Math.min((weight / target) * 100, 100) + "%";
-
-        // [추가] 실험이 진행 중일 때 CSV 다운로드용 데이터 누적
         if (isRunning) {
             experimentData.push({
                 time: ((currentTime - startTime) / 1000).toFixed(1),
@@ -333,7 +336,6 @@
         lastTime = currentTime;
     });
 
-    // 2. 시스템 상태(SystemStatus) 수신
     database.ref('system_stats').on('value', (snapshot) => {
         const stats = snapshot.val();
         if(!stats) return;
@@ -355,7 +357,6 @@
         if(stats.last_cycle_time !== undefined) document.getElementById('last_cycle_time').innerText = stats.last_cycle_time;
     });
 
-    // 3. 로봇 상태 수신 (관절)
     database.ref('robot_status').on('value', (snapshot) => {
         const data = snapshot.val();
         if (!data) return;
@@ -367,7 +368,6 @@
         }
     });
 
-    // 4. [추가] DB에 저장된 실험 히스토리(누적 데이터) 수신 및 테이블 렌더링
     database.ref('experiment_history').on('value', (snapshot) => {
         const tbody = document.getElementById('history-tbody');
         if (!snapshot.exists()) {
@@ -379,22 +379,22 @@
         let records = [];
         snapshot.forEach((child) => { records.push(child.val()); });
         
-        // 최신 데이터가 맨 위에 오도록 역순(Reverse) 출력
         for(let i = records.length - 1; i >= 0; i--) {
             const data = records[i];
             const tr = document.createElement('tr');
             
-            // 성공/실패 배지 색상 처리
             const successBadge = data.success 
-                ? '<span class="fw-bold text-success">100%</span>' 
-                : '<span class="fw-bold text-danger">실패</span>';
+                ? '<span class="badge bg-success">성공</span>' 
+                : '<span class="badge bg-danger">실패</span>';
+            
+            const successRate = data.success_rate !== undefined ? data.success_rate : Math.max(0, (100 - data.error_rate)).toFixed(2);
                 
             tr.innerHTML = `
                 <td class="fw-bold">${i + 1}</td>
                 <td>${data.target_weight}g</td>
                 <td class="text-primary fw-bold">${data.final_weight}g</td>
-                <td class="${data.error_rate <= 2.0 ? 'text-success' : 'text-danger'} fw-bold">${data.error_rate}%</td>
-                <td>${data.work_rate || 100}%</td>
+                <td class="${data.error_rate <= 5.0 ? 'text-success' : 'text-danger'} fw-bold">${data.error_rate}%</td>
+                <td class="text-info fw-bold">${successRate}%</td>
                 <td>${data.cycle_time}s</td>
                 <td>${successBadge}</td>
             `;
@@ -420,7 +420,21 @@
                 badge.className = "badge bg-secondary phase-badge";
             }
 
-            // [추가] 작업이 모두 끝나고 Ready로 돌아오면 기록 중단
+            let progressPct = 0;
+            if (newPhase === "Ready") {
+                progressPct = (startTime === 0) ? 0 : 20; 
+            }
+            else if (newPhase === "Transfer") progressPct = 40;
+            else if (newPhase === "Pouring") progressPct = 60;
+            else if (newPhase === "Mixing") progressPct = 80;
+            else if (newPhase === "Return") progressPct = 100;
+            
+            const progressBar = document.getElementById('progress-bar');
+            if(progressBar) {
+                progressBar.style.width = progressPct + "%";
+                progressBar.innerText = progressPct + "%"; 
+            }
+
             if(newPhase === "Ready") {
                 isRunning = false;
             }
@@ -480,6 +494,7 @@
             box.innerHTML = `[${time}] ${msg}<br>` + box.innerHTML;
         }
     }
+
     function exportToCSV() {
         if (experimentData.length === 0) { alert("저장할 데이터가 없습니다."); return; }
         let csvContent = "data:text/csv;charset=utf-8,Time(s),Weight(g),Flow(g/s)\r\n";
@@ -487,7 +502,7 @@
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
         link.setAttribute("href", encodedUri);
-        link.setAttribute("download", `experiment_260220_v01.csv`);
+        link.setAttribute("download", `experiment_260220_v05.csv`);
         document.body.appendChild(link);
         link.click();
     }
