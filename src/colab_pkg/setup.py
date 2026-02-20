@@ -34,7 +34,7 @@ setup(
             'test_cli = colab_pkg.test_cli_servers:main',
             'ctrl_nm = colab_pkg.system_controller_no_mixing:main',     # 혼합 단계 없는 컨트롤러 (테스트용)
             'pour_ctrl = colab_pkg.task_pouring_ctrl:main',              # Pouring 단계 제어 노드 (테스트용)
-            
+            'mix_master = colab_pkg.mix_master:main',              # Mixing 단계 제어 노드 (테스트용)
             # 최종 테스트용 (모든 단계)
             'ui = colab_pkg.user_interface:main',
             'ctrl = colab_pkg.system_controller:main',

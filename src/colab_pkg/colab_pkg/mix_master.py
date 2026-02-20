@@ -102,7 +102,7 @@ def perform_task(mixing_duration=0.0, logger=None):
     def beaker_insert_with_force_trigger(
         before_j,
         after_j,
-        fz_trigger=8.0,          # 외력 감지 임계값(N)
+        fz_trigger=3.0,          # 외력 감지 임계값(N)
         j_vel_slow=10, j_acc_slow=10,
         steps=50,                # BEFORE->AFTER 분할수(클수록 천천히/부드럽게)
         amp_rz_deg=18.0,         # 회전 진폭(좌우 흔들기)
@@ -190,32 +190,32 @@ def perform_task(mixing_duration=0.0, logger=None):
     # =========================
     # 시퀀스
     # =========================
-    log("[1] Go PICK_DOWN")
-    gripper_open()
-    movel(P["PICK_DOWN"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    wait(0.2)
+    # log("[1] Go PICK_DOWN")
+    # gripper_open()
+    # movel(P["PICK_DOWN"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # wait(0.2)
 
-    log("[2] Gripper CLOSE (pick)")
-    gripper_close()
+    # log("[2] Gripper CLOSE (pick)")
+    # gripper_close()
 
-    log("[3] Go PICK_UP (lift)")
-    movel(P["PICK_UP"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    wait(0.2)
+    # log("[3] Go PICK_UP (lift)")
+    # movel(P["PICK_UP"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # wait(0.2)
 
-    log("[4] Go POUR_UP (move)")
-    movel(P["POUR_UP"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    wait(0.2)
+    # log("[4] Go POUR_UP (move)")
+    # movel(P["POUR_UP"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # wait(0.2)
 
-    log("[5] Go POUR_READY (down)")
-    movel(P["POUR_READY"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    wait(0.2)
+    # log("[5] Go POUR_READY (down)")
+    # movel(P["POUR_READY"], vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # wait(0.2)
 
     # ✅ 여기서 "외력 감지 후 periodic 섞기" 수행
     log("[6] Beaker insert: slow approach -> force trigger -> periodic mix -> reach AFTER -> +3s mix")
     beaker_insert_with_force_trigger(
         BEAKER_BEFORE_J,
         BEAKER_AFTER_J,
-        fz_trigger=8.0,
+        fz_trigger=4.5,
         j_vel_slow=10, j_acc_slow=10,
         steps=50,
         amp_rz_deg=18.0,
