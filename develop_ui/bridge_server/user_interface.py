@@ -4,8 +4,8 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260217_v02 (Service Client Implemented)
-[Description] Firebase 명령을 받아 /start_process 서비스를 호출하는 브릿지
+[Version] 260220_v01 (Service Client Implemented + Experiment History Archiving)
+[Description] Firebase 명령을 받아 /start_process 서비스를 호출하는 브릿지 및 결과 히스토리 DB 저장
 """
 
 import rclpy
@@ -13,13 +13,13 @@ from rclpy.node import Node
 import firebase_admin
 from firebase_admin import credentials, db
 import time
+import datetime  # [추가] DB 히스토리에 날짜/시간을 기록하기 위한 모듈
 
 # 메시지 및 서비스 타입 임포트
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32, String
 
 try:
-    # [변경] UiInput 대신 RobotCommand 서비스 임포트
     from colab_interfaces.srv import RobotCommand
     from colab_interfaces.msg import SystemStatus
     IMPORT_SUCCESS = True
@@ -44,18 +44,16 @@ class UserInterface(Node):
             self.get_logger().error(f"Firebase Error: {e}")
 
         if IMPORT_SUCCESS:
-            # 2. [핵심 변경] Service Client 생성 (/start_process)
-            # 역할: 로봇에게 작업을 시작하라고 '요청'하는 클라이언트
-            self.cli = self.create_client(RobotCommand, '/start_process')
+            # 2. Service Client 생성 (/start_process)
+            self.cli = self.create_client(RobotCommand, 'start_process')
             
             # 3. 긴급 정지 Publisher (/stop)
-            # 역할: 다이어그램에 나온 대로 긴급 정지는 Topic으로 발행
-            self.stop_pub = self.create_publisher(String, '/stop', 10)
+            self.stop_pub = self.create_publisher(String, 'stop', 10)
             
             # 4. Subscribers (Robot -> UI)
-            self.create_subscription(JointState, '/dsr01/joint_states', self.joint_callback, 10)
-            self.create_subscription(Float32, '/load_cell/weight', self.weight_callback, 10)
-            self.create_subscription(SystemStatus, '/system_status', self.system_status_callback, 10)
+            self.create_subscription(JointState, 'dsr01/joint_states', self.joint_callback, 10)
+            self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10)
+            self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10)
         
         # 5. Timer & Variables
         self.timer = self.create_timer(0.1, self.loop_callback)
@@ -63,6 +61,11 @@ class UserInterface(Node):
         
         self.latest_weight = 0.0
         self.latest_system_status = {}
+        
+        # [추가] 실험 히스토리 저장을 위한 상태 변수
+        self.current_target_weight = 0.0
+        self.current_material = "Unknown"
+        self.last_total_count = 0 
 
     def loop_callback(self):
         self.check_firebase_commands()
@@ -78,8 +81,10 @@ class UserInterface(Node):
                     self.last_command_timestamp = cmd_data['timestamp']
                     cmd_type = cmd_data.get('type', '')
 
-                    # [핵심 로직] start_pouring 명령이 오면 -> 서비스 호출 (Call Service)
+                    # [수정] start_pouring 명령이 오면 목표값과 재료를 기억해두고 서비스 호출
                     if cmd_type == 'start_pouring':
+                        self.current_target_weight = float(cmd_data.get('target_weight', 0.0))
+                        self.current_material = cmd_data.get('material', 'Unknown')
                         self.call_service_start_process(cmd_data)
                     
                     elif cmd_type == 'emergency_stop':
@@ -94,20 +99,17 @@ class UserInterface(Node):
 
     def call_service_start_process(self, cmd_data):
         """ /start_process 서비스 호출 함수 """
-        # 서비스 서버(로봇 제어 노드)가 켜져 있는지 1초만 기다려봄
         if not self.cli.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('⚠️ 서비스(/start_process) 연결 실패. 로봇 제어 노드가 켜져 있나요?')
             return
 
-        # 요청 데이터 채우기 (RobotCommand.srv 정의에 따름)
         req = RobotCommand.Request()
-        req.mode = "FULL"  # 기본 모드
+        req.mode = "FULL"
         req.target_weight = float(cmd_data.get('target_weight', 0.0))
         req.mixing_duration = float(cmd_data.get('mixing_duration', 0.0))
 
         self.get_logger().info(f"📤 서비스 요청 보냄: Target={req.target_weight}g, Mix={req.mixing_duration}s")
         
-        # 비동기 호출 (결과를 기다리지 않고 바로 넘어감)
         self.future = self.cli.call_async(req)
         self.future.add_done_callback(self.service_response_callback)
 
@@ -131,7 +133,6 @@ class UserInterface(Node):
             if self.latest_system_status:
                 updates['system_stats'] = self.latest_system_status
                 
-                # [호환성] 기존 로봇 상태 경로에도 일부 데이터 업데이트
                 updates['robot_status/phase'] = self.latest_system_status.get('phase', 'Ready')
                 updates['robot_status/velocity'] = self.latest_system_status.get('tcp_vel', 0)
                 updates['robot_status/acceleration'] = self.latest_system_status.get('tcp_acc', 0)
@@ -141,6 +142,13 @@ class UserInterface(Node):
             pass
 
     def system_status_callback(self, msg):
+        # [추가] 로봇 노드에서 작업 횟수(total_count)를 올렸다면 사이클이 끝났다는 의미!
+        if hasattr(self, 'last_total_count') and msg.total_count > self.last_total_count:
+            # 처음 노드가 켜졌을 때 이전 total_count를 불러오면서 바로 저장되는 것을 방지
+            if self.last_total_count != 0: 
+                self.save_experiment_history(msg)
+            self.last_total_count = msg.total_count # 다음 체크를 위해 업데이트
+
         self.latest_system_status = {
             "phase": msg.phase,
             "tcp_vel": msg.tcp_vel,
@@ -152,6 +160,27 @@ class UserInterface(Node):
             "last_cycle_time": round(msg.last_cycle_time, 2)
         }
         
+    # [추가] 1사이클 실험 종료 시 DB에 히스토리를 영구 기록(Push)하는 함수
+    def save_experiment_history(self, msg):
+        try:
+            history_data = {
+                'timestamp': int(time.time() * 1000),
+                'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'material': self.current_material,
+                'target_weight': self.current_target_weight,
+                'final_weight': round(self.latest_weight, 2),
+                'error_rate': round(msg.error_rate, 2),
+                'cycle_time': round(msg.last_cycle_time, 2),
+                'success': True if msg.error_rate <= 2.0 else False  # 오차율 2% 이하면 성공
+            }
+            # push()를 사용하여 experiment_history/ 경로에 데이터 누적
+            db_ref = db.reference('experiment_history')
+            new_record = db_ref.push(history_data)
+            
+            self.get_logger().info(f"💾 [DB 아카이빙 완료] 히스토리 ID: {new_record.key}")
+        except Exception as e:
+            self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
+            
     def joint_callback(self, msg): pass
     def weight_callback(self, msg): self.latest_weight = msg.data
 
