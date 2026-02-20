@@ -4,8 +4,7 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260220_v03 (Trigger Fixed: Save History on Service Success)
-[Description] Firebase 명령을 받아 /start_process 서비스를 호출하는 브릿지 및 결과 히스토리 DB 저장
+[Version] 260220_v06 (MultiThreaded + 15% Tolerance 100/0 Success Rate + History Archiving)
 """
 
 import rclpy
@@ -16,6 +15,8 @@ import time
 import os
 from dotenv import load_dotenv
 import datetime
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 
 ROBOT_ID = "dsr01"
 
@@ -23,7 +24,6 @@ ROBOT_ID = "dsr01"
 env_path = os.path.expanduser('~/Co-Lab/.env')
 load_dotenv(dotenv_path=env_path)
 
-# 메시지 및 서비스 타입 임포트
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32, String
 
@@ -32,14 +32,13 @@ try:
     from colab_interfaces.msg import SystemStatus
     IMPORT_SUCCESS = True
 except ImportError:
-    print("❌ [Error] colab_interfaces 패키지를 찾을 수 없습니다. source install/setup.bash를 확인하세요.")
+    print("❌ [Error] colab_interfaces 패키지를 찾을 수 없습니다.")
     IMPORT_SUCCESS = False
 
 class UserInterface(Node):
     def __init__(self):
         super().__init__('user_interface', namespace=ROBOT_ID)
         
-        # 1. Firebase 초기화
         try:
             cred_path = os.getenv('FIREBASE_CRED_PATH')
             db_url = os.getenv('FIREBASE_DB_URL')
@@ -53,32 +52,30 @@ class UserInterface(Node):
                     'databaseURL': db_url
                 })
             self.get_logger().info("🔥 Firebase Connected!")
-            db.reference('commands').set({}) # 초기화
+            db.reference('commands').set({}) 
         except Exception as e:
             self.get_logger().error(f"Firebase Error: {e}")
 
         if IMPORT_SUCCESS:
-            # 2. Service Client 생성 (/start_process)
             self.cli = self.create_client(RobotCommand, 'start_process')
-            
-            # 3. 긴급 정지 Publisher (/stop)
             self.stop_pub = self.create_publisher(String, 'stop', 10)
+
+            self.cb_group_sensor = ReentrantCallbackGroup()
             
-            # 4. Subscribers (Robot -> UI)
-            self.create_subscription(JointState, 'joint_states', self.joint_callback, 10)
-            self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10)
-            self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10)
+            self.create_subscription(JointState, 'joint_states', self.joint_callback, 10, callback_group=self.cb_group_sensor)
+            self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10, callback_group=self.cb_group_sensor)
+            self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10, callback_group=self.cb_group_sensor)
         
-        # 5. Timer & Variables
-        self.timer = self.create_timer(0.1, self.loop_callback)
+        self.cb_group_timer = ReentrantCallbackGroup()
+        self.timer = self.create_timer(0.1, self.loop_callback, callback_group=self.cb_group_timer)
         self.last_command_timestamp = time.time() * 1000 
         
         self.latest_weight = 0.0
         self.latest_system_status = {}
 
-        # 실험 히스토리 저장을 위한 상태 변수
         self.current_target_weight = 0.0
         self.current_material = "Unknown"
+        self.experiment_start_time = 0.0
 
     def loop_callback(self):
         self.check_firebase_commands()
@@ -111,7 +108,7 @@ class UserInterface(Node):
 
     def call_service_start_process(self, cmd_data):
         if not self.cli.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn('⚠️ 서비스(/start_process) 연결 실패. 로봇 제어 노드가 켜져 있나요?')
+            self.get_logger().warn('⚠️ 서비스(/start_process) 연결 실패.')
             return
 
         req = RobotCommand.Request()
@@ -121,6 +118,8 @@ class UserInterface(Node):
 
         self.get_logger().info(f"📤 서비스 요청 보냄: Target={req.target_weight}g, Mix={req.mixing_duration}s")
         
+        self.experiment_start_time = time.time()
+        
         self.future = self.cli.call_async(req)
         self.future.add_done_callback(self.service_response_callback)
 
@@ -129,8 +128,6 @@ class UserInterface(Node):
             response = future.result()
             if response.success:
                 self.get_logger().info(f"✅ 서비스 성공: {response.message}")
-                
-                # [핵심 수정] 터미널에 성공이 뜨면 무조건 바로 히스토리를 DB에 저장합니다!
                 self.save_experiment_history()
             else:
                 self.get_logger().warn(f"❌ 서비스 실패: {response.message}")
@@ -145,17 +142,19 @@ class UserInterface(Node):
             }
             if self.latest_system_status:
                 updates['system_stats'] = self.latest_system_status
-                
                 updates['robot_status/phase'] = self.latest_system_status.get('phase', 'Ready')
                 updates['robot_status/velocity'] = self.latest_system_status.get('tcp_vel', 0)
                 updates['robot_status/acceleration'] = self.latest_system_status.get('tcp_acc', 0)
             
             db.reference().update(updates)
-        except Exception:
-            pass
+
+            if hasattr(self, 'latest_weight_rcv_time'):
+                delay = time.time() - self.latest_weight_rcv_time
+
+        except Exception as e:
+            self.get_logger().error(f"Firebase Upload Error: {e}")
 
     def system_status_callback(self, msg):
-        # total_count에 의존하지 않도록 트리거 제거. 서비스 성공 시에만 저장됨.
         self.latest_system_status = {
             "phase": msg.phase,
             "tcp_vel": msg.tcp_vel,
@@ -166,17 +165,29 @@ class UserInterface(Node):
             "error_rate": round(msg.error_rate, 2),
             "last_cycle_time": round(msg.last_cycle_time, 2)
         }
+        
+    def joint_callback(self, msg): pass
 
-    # 1사이클 실험 종료 시 DB에 히스토리를 영구 기록(Push)하는 함수
+    def weight_callback(self, msg): 
+        self.latest_weight = msg.data
+        self.latest_weight_rcv_time = time.time()
+
     def save_experiment_history(self):
         try:
-            # 1. 로봇이 오차율을 보내줬는지 확인하고, 없다면 현재 무게 기반으로 직접 계산하는 안전장치
             error_rate = self.latest_system_status.get('error_rate', 0.0)
             if error_rate == 0.0 and self.current_target_weight > 0:
                 error_g = abs(self.latest_weight - self.current_target_weight)
                 error_rate = round((error_g / self.current_target_weight) * 100, 2)
 
-            cycle_time = self.latest_system_status.get('last_cycle_time', 0.0)
+            # [수정] 허용 오차율 15% 적용 및 성공률 100/0% 강제 변환
+            TOLERANCE = 15.0 
+            is_success = True if error_rate <= TOLERANCE else False
+            success_rate = 100 if is_success else 0
+
+            if self.experiment_start_time > 0:
+                calculated_cycle_time = round(time.time() - self.experiment_start_time, 2)
+            else:
+                calculated_cycle_time = self.latest_system_status.get('last_cycle_time', 0.0)
 
             history_data = {
                 'timestamp': int(time.time() * 1000),
@@ -185,25 +196,28 @@ class UserInterface(Node):
                 'target_weight': self.current_target_weight,
                 'final_weight': round(self.latest_weight, 2),
                 'error_rate': error_rate,
-                'cycle_time': cycle_time,
-                'work_rate': 100, # 작업 완료이므로 100%
-                'success': True if error_rate <= 2.0 else False
+                'success_rate': success_rate, # 100 아니면 0
+                'cycle_time': calculated_cycle_time,
+                'success': is_success # TOLERANCE 15% 기준 적용
             }
             db_ref = db.reference('experiment_history')
             new_record = db_ref.push(history_data)
             
-            self.get_logger().info(f"💾 [DB 기록 완료] 히스토리 ID: {new_record.key}")
+            self.get_logger().info(f"💾 [DB 기록 완료] 오차율: {error_rate}%, 판정: {'성공' if is_success else '실패'}")
+            self.experiment_start_time = 0.0
+            
         except Exception as e:
             self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
-            
-    def joint_callback(self, msg): pass
-    def weight_callback(self, msg): self.latest_weight = msg.data
 
 def main(args=None):
     rclpy.init(args=args)
     node = UserInterface()
+
+    executor = MultiThreadedExecutor() 
+    executor.add_node(node) 
+    
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
