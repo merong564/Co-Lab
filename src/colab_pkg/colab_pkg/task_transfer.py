@@ -121,7 +121,6 @@ def initialize_robot():
     from DSR_ROBOT2 import set_tool, set_tcp, set_robot_mode, get_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS
 
     set_robot_mode(ROBOT_MODE_MANUAL)
-    set_tool(ROBOT_TOOL)
     set_tcp(ROBOT_TCP)
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
     time.sleep(1.0)
@@ -134,6 +133,12 @@ def initialize_robot():
 def perform_task(mode, tube_type):
     global STOP_REQUESTED
     from DSR_ROBOT2 import movej, movel, posx, wait, set_digital_output, DR_BASE
+    from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
+    
+    set_robot_mode(ROBOT_MODE_MANUAL)
+    set_tcp(ROBOT_TCP)
+    set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+    time.sleep(0.5)
 
     # 좌표 데이터 로드
     try:

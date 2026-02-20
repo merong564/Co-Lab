@@ -129,6 +129,12 @@ def calculate_tilt_angle(current_w: float, target_w: float):
 
 def perform_task(node: TaskPouring, target_weight: float) -> bool:
     from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait
+    from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
+    
+    set_robot_mode(ROBOT_MODE_MANUAL)
+    set_tcp(FINGER_TCP_NAME)
+    set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+    time.sleep(0.5)
 
     global STOP_REQUESTED
 
