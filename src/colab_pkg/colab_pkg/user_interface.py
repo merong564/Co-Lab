@@ -15,6 +15,8 @@ from firebase_admin import credentials, db
 import time
 import os  # [추가] 환경 변수 사용
 from dotenv import load_dotenv # [추가] .env 로드
+from rclpy.executors import MultiThreadedExecutor # [추가] 멀티스레드 실행기 임포트
+from rclpy.callback_groups import ReentrantCallbackGroup # [추가] 콜백 그룹 임포트
 
 ROBOT_ID = "dsr01"
 
@@ -65,14 +67,17 @@ class UserInterface(Node):
             # 3. 긴급 정지 Publisher (/stop)
             # 역할: 다이어그램에 나온 대로 긴급 정지는 Topic으로 발행
             self.stop_pub = self.create_publisher(String, 'stop', 10)
+
+            self.cb_group_sensor = ReentrantCallbackGroup()
             
             # 4. Subscribers (Robot -> UI)
-            self.create_subscription(JointState, 'joint_states', self.joint_callback, 10)
-            self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10)
-            self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10)
+            self.create_subscription(JointState, 'joint_states', self.joint_callback, 10, callback_group=self.cb_group_sensor)
+            self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10, callback_group=self.cb_group_sensor)
+            self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10, callback_group=self.cb_group_sensor)
         
+        self.cb_group_timer = ReentrantCallbackGroup()
         # 5. Timer & Variables
-        self.timer = self.create_timer(0.1, self.loop_callback)
+        self.timer = self.create_timer(0.1, self.loop_callback, callback_group=self.cb_group_timer)
         self.last_command_timestamp = time.time() * 1000 
         
         self.latest_weight = 0.0
@@ -151,8 +156,15 @@ class UserInterface(Node):
                 updates['robot_status/acceleration'] = self.latest_system_status.get('tcp_acc', 0)
             
             db.reference().update(updates)
-        except Exception:
-            pass
+
+            # 업로드 소요 시간 계산
+            if hasattr(self, 'latest_weight_rcv_time'):
+                delay = time.time() - self.latest_weight_rcv_time
+                self.get_logger().info(f"데이터 지연 시간: {delay:.3f} 초")
+
+
+        except Exception as e:
+            self.get_logger().error(f"Firebase Upload Error: {e}") # [추가] 에러 원인 파악을 위한 로그
 
     def system_status_callback(self, msg):
         self.latest_system_status = {
@@ -167,13 +179,20 @@ class UserInterface(Node):
         }
         
     def joint_callback(self, msg): pass
-    def weight_callback(self, msg): self.latest_weight = msg.data
+
+    def weight_callback(self, msg): 
+        self.latest_weight = msg.data
+        self.latest_weight_rcv_time = time.time() # 수신 시간 기록
 
 def main(args=None):
     rclpy.init(args=args)
     node = UserInterface()
+
+    executor = MultiThreadedExecutor() # [추가] 멀티스레드 실행기 인스턴스 생성
+    executor.add_node(node) # [추가] 실행기에 노드 추가
+    
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
