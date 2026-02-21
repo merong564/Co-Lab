@@ -46,8 +46,15 @@ def perform_task(logger=None):
         posj, posx,
         set_digital_output, wait,
         set_robot_mode, ROBOT_MODE_AUTONOMOUS,
+
+        # compliance/force
         task_compliance_ctrl, release_compliance_ctrl,
+        set_desired_force, release_force,
+        DR_FC_MOD_REL,
+
+        # periodic / force read
         move_periodic, get_tool_force,
+
         DR_BASE, DR_TOOL
     )
 
@@ -76,6 +83,67 @@ def perform_task(logger=None):
         set_digital_output(2, OFF)
         wait(2.0)
 
+    # ✅ 네가 준 방식 그대로: 순응+힘제어+periodic+stable 체크
+    def compliance_wiggle(
+        force_z=-20,                 # fd z
+        amp=[0, 0, -5, 0, 0, 15],     # 네 값 그대로
+        period=1.0,
+        atime=0.2,
+        repeat=10,
+        stable_need=5,
+        stable_dt=0.5,
+        stable_min=10,
+        stable_max=80,
+        ref_force=DR_TOOL,
+        ref_periodic=DR_TOOL,
+    ):
+        def _safe_get_fz():
+            ret = get_tool_force(ref_force)
+            f = ret[0] if isinstance(ret, tuple) else ret
+            if isinstance(f, (list, tuple)) and len(f) >= 3:
+                return abs(float(f[2]))
+            return None
+
+        # 순응 활성화
+        task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
+        wait(0.1)
+
+        # Z축 기준 힘 인가(네 방식)
+        fd = [0, 0, float(force_z), 0, 0, 0]
+        fctrl_dir = [0, 0, 1, 0, 0, 0]
+        set_desired_force(fd, dir=fctrl_dir, mod=DR_FC_MOD_REL)
+        wait(0.1)
+
+        # periodic (네 값 그대로)
+        move_periodic(
+            amp=amp,
+            period=period,
+            atime=atime,
+            repeat=repeat,
+            ref=ref_periodic
+        )
+
+        # stable 체크 (네 로직 그대로)
+        stable = 0
+        while stable < stable_need:
+            fz = _safe_get_fz()
+            if fz is None:
+                log("[WARN] get_tool_force failed/None")
+                stable = 0
+            else:
+                log(f"fz:{fz:.2f}")
+                if (fz >= stable_min) and (fz <= stable_max):
+                    stable += 1
+                else:
+                    stable = 0
+
+            wait(stable_dt)
+
+        # 종료
+        release_force()
+        release_compliance_ctrl()
+        wait(0.2)
+
     # 홈 (조인트 홈은 movej 유지)
     P0_HOME = posj(0, 0, 90, 0, 90, 0)
 
@@ -83,30 +151,22 @@ def perform_task(logger=None):
     P_PICK_DOWN = posx(448.18, -180.31, 118.12, 110.37, -179.05, 110.13)
     P_PICK_UP   = posx(448.58, -179.86, 207.30, 104.66, -179.86, 104.49)
 
-
-    # ✅ 너가 준 "테스크(posx, DR_BASE 기준)"으로 교체할 자리
-    # 지금은 아직 안 줘서 placeholder. 받는 즉시 여기만 바꿔주면 됨.
-    BEAKER_AFTER_X = posx(340.96, 84.35, 136.51, 26.49, -179.49, 26.20)  # TODO: 너가 줄 BEFORE 테스크 좌표
-    BEAKER_BEFORE_X  = posx(340.96, 84.35, 276.83, 26.49, -179.49, 26.20)  # TODO: 너가 줄 AFTER  테스크 좌표
+    # 비커 BEFORE/AFTER (posx) - 네 placeholder 유지
+    BEAKER_AFTER_X   = posx(340.96, 84.35, 136.51, 26.49, -179.49, 26.20)
+    BEAKER_BEFORE_X  = posx(340.96, 84.35, 276.83, 26.49, -179.49, 26.20)
 
     # =========================
-    # 비커 삽입: BEFORE_X -> AFTER_X
-    # - 분할 movel로 천천히 접근
-    # - force 트리거 걸리면: 그 순간부터 compliance + periodic
-    # - AFTER 도달 후: 트리거 시점 기준 extra_spin_sec까지 periodic 유지
+    # 비커 삽입 flow (네 기존 유지)
+    # - 단, periodic 방식은 "네 compliance 방식"으로 바꾸고 싶으면
+    #   triggered 시점/AFTER 도착 후에 compliance_wiggle() 호출하면 됨.
     # =========================
     def beaker_insert_flow(
         before_x,
         after_x,
         fz_trigger=4.5,
         vel_slow=30, acc_slow=30,
-        steps=80,
-        amp_rz_deg=60.0,
-        amp_z_mm=-2.0,
-        period=1.0,
-        extra_spin_sec=20.0
+        steps=80
     ) -> bool:
-
         def _safe_get_fz():
             ret = get_tool_force(DR_TOOL)
             f = ret[0] if isinstance(ret, tuple) else ret
@@ -114,69 +174,43 @@ def perform_task(logger=None):
                 return abs(float(f[2]))
             return None
 
-        # posx 보간용 6값 추출
-        try:
-            b = [before_x[0], before_x[1], before_x[2], before_x[3], before_x[4], before_x[5]]
-            a = [after_x[0],  after_x[1],  after_x[2],  after_x[3],  after_x[4],  after_x[5]]
-        except Exception:
-            log("[ERR] posx 인덱싱 불가. (환경에 따라 posx가 list처럼 안 될 수 있음)")
-            raise
+        b = [before_x[0], before_x[1], before_x[2], before_x[3], before_x[4], before_x[5]]
+        a = [after_x[0],  after_x[1],  after_x[2],  after_x[3],  after_x[4],  after_x[5]]
 
-        # 1) BEFORE 정렬
         movel(before_x, vel=vel_slow, acc=acc_slow, ref=DR_BASE)
         wait(0.2)
 
         triggered = False
-        trig_t0 = None
-        compliance_on = False
 
-        amp = [0, 0, amp_z_mm, 0, 0, amp_rz_deg]
+        for i in range(1, steps + 1):
+            t = i / float(steps)
+            x = [b[k] + (a[k] - b[k]) * t for k in range(6)]
+            movel(posx(*x), vel=vel_slow, acc=acc_slow, ref=DR_BASE)
 
-        try:
-            # 2) BEFORE -> AFTER : 분할 movel
-            for i in range(1, steps + 1):
-                t = i / float(steps)
-                x = [b[k] + (a[k] - b[k]) * t for k in range(6)]
+            if not triggered:
+                fz = _safe_get_fz()
+                if fz is not None and fz >= fz_trigger:
+                    triggered = True
+                    log(f"[force] TRIGGERED at step {i}/{steps} (fz={fz:.2f} >= {fz_trigger})")
 
-                movel(posx(*x), vel=vel_slow, acc=acc_slow, ref=DR_BASE)
+            wait(0.05)
 
-                if not triggered:
-                    fz = _safe_get_fz()
-                    if fz is not None and fz >= fz_trigger:
-                        triggered = True
-                        trig_t0 = time.time()
-                        log(f"[force] TRIGGERED at step {i}/{steps} (fz={fz:.2f} >= {fz_trigger})")
-
-                        task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
-                        compliance_on = True
-
-                if triggered:
-                    move_periodic(
-                        amp=amp,
-                        period=period,
-                        atime=0.2,
-                        repeat=1,
-                        ref=DR_TOOL
-                    )
-
-                wait(0.05)
-
-            # 3) AFTER 도착 후: 트리거 시점 기준 extra_spin_sec까지 유지
-            if triggered and trig_t0 is not None:
-                while (time.time() - trig_t0) < extra_spin_sec:
-                    move_periodic(
-                        amp=amp,
-                        period=period,
-                        atime=0.2,
-                        repeat=1,
-                        ref=DR_TOOL
-                    )
-                    wait(0.05)
-
-        finally:
-            if compliance_on:
-                release_compliance_ctrl()
-                wait(0.2)
+        # ✅ AFTER 도착 후 회전방식 = 네 compliance 방식으로 수행하고 싶으면 여기서 실행
+        # (원하면 triggered 조건 걸고, 아니면 항상 실행)
+        if triggered:
+            compliance_wiggle(
+                force_z=-20,
+                amp=[0, 0, -5, 0, 0, 15],
+                period=1.0,
+                atime=0.2,
+                repeat=10,
+                stable_need=5,
+                stable_dt=0.5,
+                stable_min=10,
+                stable_max=80,
+                ref_force=DR_TOOL,
+                ref_periodic=DR_TOOL
+            )
 
         return triggered
 
@@ -192,6 +226,30 @@ def perform_task(logger=None):
     movel(P_PICK_DOWN, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     wait(0.2)
 
+    # ✅ 여기!! 너가 요청한 부분:
+    # P_PICK_UP에서 P_PICK_DOWN으로 내려갈 때 "네 compliance 회전 방식" 적용
+    log("[1.5] Go PICK_UP (movel)")
+    movel(P_PICK_UP, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    wait(0.2)
+
+    log("[1.6] Down to PICK_DOWN (movel) -> compliance_wiggle (your rotation method)")
+    movel(P_PICK_DOWN, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    wait(0.2)
+
+    compliance_wiggle(
+        force_z=-20,
+        amp=[0, 0, -5, 0, 0, 15],   # ✅ 네 각도/시간 그대로
+        period=1.0,
+        atime=0.2,
+        repeat=10,
+        stable_need=5,
+        stable_dt=0.5,
+        stable_min=10,
+        stable_max=80,
+        ref_force=DR_TOOL,
+        ref_periodic=DR_TOOL
+    )
+
     log("[2] Pick: CLOSE")
     gripper_close()
 
@@ -199,34 +257,25 @@ def perform_task(logger=None):
     movel(P_PICK_UP, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     wait(0.2)
 
-    # ✅ BEAKER 접근도 "단순 이동=movel"로 통일
-    # (정렬 목적: 조인트 before로 먼저 맞추고 싶으면 movej로 1번 찍어도 되는데, 네 요청이 movel이라 movel로 감)
     log("[4] Go BEAKER_BEFORE_X (movel, DR_BASE)")
     movel(BEAKER_BEFORE_X, vel=30, acc=30, ref=DR_BASE)
     wait(0.2)
 
-    log("[5] Beaker insert (movel interpolation + force trigger + periodic)")
+    log("[5] Beaker insert (movel interpolation + force trigger)")
     triggered = beaker_insert_flow(
         BEAKER_BEFORE_X,
         BEAKER_AFTER_X,
         fz_trigger=4.5,
         vel_slow=30, acc_slow=30,
-        steps=80,
-        amp_rz_deg=60.0,
-        amp_z_mm=-2.0,
-        period=1.0,
-        extra_spin_sec=20.0
+        steps=80
     )
 
-    if triggered:
-        log("[6] Triggered: return BEFORE -> release")
-    else:
-        log("[6] No force until AFTER: return BEFORE -> release")
+    log(f"[6] insert done. triggered={triggered}")
 
     movel(BEAKER_BEFORE_X, vel=30, acc=30, ref=DR_BASE)
     wait(0.2)
 
-    # ✅ 마무리: PICK_UP -> PICK_DOWN -> OPEN -> HOME
+    # 마무리: PICK_UP -> PICK_DOWN -> OPEN -> HOME
     movel(P_PICK_UP, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     wait(0.2)
 
