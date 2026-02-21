@@ -32,6 +32,8 @@ FINGER_TCP_OFFSET = [-32.0, 0.0, 228.0, 0.0, 0.0, 0.0] # [추가] 비커 쪽 집
 VELOCITY = 40
 ACC = 60
 P_GAIN = 0.01
+D_GAIN = 0.05 # [추가] 미분 게인 (재료가 쏟아질 때 브레이크 강도)
+prev_error = 0.0 # [추가] 이전 오차 저장용 변수
 MAX_TILT_STEP = 1.0
 STOP_THRESHOLD = 20.0
 
@@ -175,6 +177,26 @@ def calculate_tilt_angle(current_w: float, target_w: float):
 
     return float(delta_angle), float(error)
 
+def calculate_tilt_angle_pd(current_w: float, target_w: float): # [추가] 순수 PD 제어기
+    global prev_error, P_GAIN, D_GAIN, MAX_TILT_STEP # [추가]
+    
+    error = target_w - current_w # [추가]
+    
+    # [추가] PD 제어 계산 (단일 P_GAIN 유지)
+    p_term = error * P_GAIN # [추가]
+    d_term = (error - prev_error) * D_GAIN # [추가] 무게가 갑자기 쏟아지면 음수값이 커짐
+    prev_error = error # [추가] 현재 오차를 다음 사이클을 위해 저장
+    
+    delta_angle = p_term + d_term # [추가]
+    
+    # [추가] 출력 제한 (클램핑)
+    if delta_angle > MAX_TILT_STEP: # [추가]
+        delta_angle = MAX_TILT_STEP # [추가]
+    elif delta_angle < -MAX_TILT_STEP: # [추가]
+        delta_angle = -MAX_TILT_STEP # [추가]
+        
+    return float(delta_angle), float(error) # [추가]
+
 def perform_task(node: TaskPouring, target_weight: float) -> bool:
     from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait
     from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
@@ -186,6 +208,7 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
 
     global STOP_REQUESTED
     global P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD # [추가] 전역 변수 선언
+    global prev_error
 
     # [추가] 목표 무게에 따른 파라미터 분기
     if target_weight < 100.0:
@@ -221,6 +244,7 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
         return False
 
     stop_target = target_weight - STOP_THRESHOLD
+    prev_error = target_weight - float(node.current_weight)
 
     while rclpy.ok():
         # STOP 들어오면: 자세 복귀 후 종료(노드 유지)
@@ -260,7 +284,9 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
             print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
-        delta, error = calculate_tilt_angle(current_weight, target_weight)
+        #delta, error = calculate_tilt_angle(current_weight, target_weight)
+        delta, error = calculate_tilt_angle_pd(current_weight, target_weight) # [추가] 순수 PD 제어 함수로 변경
+
         log_d.append(delta) # [추가] 제어 입력 로깅
 
         try:
