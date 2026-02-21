@@ -31,20 +31,11 @@ FINGER_TCP_OFFSET = [-32.0, 0.0, 228.0, 0.0, 0.0, 0.0] # [추가] 비커 쪽 집
 
 VELOCITY = 40
 ACC = 60
-
-# 기본 튜닝 상수 (참조용으로 유지)
-P_GAIN = 0.01
-D_GAIN = 0.05 # [추가] 미분 게인 (재료가 쏟아질 때 브레이크 강도)
+P_GAIN = 0.015
+D_GAIN = 0.08 # [추가] 미분 게인 (재료가 쏟아질 때 브레이크 강도)
 prev_error = 0.0 # [추가] 이전 오차 저장용 변수
 MAX_TILT_STEP = 1.0
-STOP_THRESHOLD = 20.0
-
-# [추가] 시험관 종류별 튜닝 파라미터 딕셔너리
-TUBE_TUNING = {
-    "LARGE": {"P_GAIN": 0.01, "MAX_TILT_STEP": 1.0, "STOP_THRESHOLD": 20.0},
-    "SMALL1": {"P_GAIN": 0.005, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 5.0},
-    "SMALL2": {"P_GAIN": 0.005, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 5.0}
-}
+STOP_THRESHOLD = 12.0
 
 # STOP 신호 플래그 (STOP 토픽 받으면 True)
 STOP_REQUESTED = False
@@ -90,11 +81,10 @@ def calc_metrics(log_t, log_w, target_w, final_w, p_gain, max_tilt_step, stop_th
     with open(file_path, mode='a', newline='') as f: # [추가]
         writer = csv.writer(f) # [추가]
         if not file_exists: # [추가] 헤더가 없을 경우 생성
-            writer.writerow(["Timestamp", "Target_W", "Final_W", "P_GAIN", "MAX_TILT_STEP", "STOP_THRESHOLD", "Overshoot", "Rise_Time", "Settling_Time", "SS_Error"]) # [추가]
+            writer.writerow(["Timestamp", "Target_W", "Final_W", "P_GAIN", "D_GAIN", "MAX_TILT_STEP", "STOP_THRESHOLD", "Overshoot", "Rise_Time", "Settling_Time", "SS_Error"]) # [추가]
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # [추가]
-        # [수정] 동적 파라미터 적용
-        writer.writerow([timestamp, target_w, final_w, p_gain, max_tilt_step, stop_thresh, round(overshoot, 2), round(rise_t, 2), round(set_t, 2), round(ss_err, 2)]) # [추가]
+        writer.writerow([timestamp, target_w, final_w, P_GAIN, D_GAIN, MAX_TILT_STEP, STOP_THRESHOLD, round(overshoot, 2), round(rise_t, 2), round(set_t, 2), round(ss_err, 2)]) # [추가]
 
 # ==========================================
 # 2. 통신 전담 노드 (서비스 & 토픽)
@@ -227,15 +217,15 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     global P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD # [추가] 전역 변수 선언
     global prev_error
 
-    # [추가] 목표 무게에 따른 파라미터 분기
-    if target_weight < 100.0:
-        P_GAIN = 0.03
-        MAX_TILT_STEP = 3.0
-        STOP_THRESHOLD = 10.0
-    else:
-        P_GAIN = 0.01
-        MAX_TILT_STEP = 1.0
-        STOP_THRESHOLD = 20.0
+    # # [추가] 목표 무게에 따른 파라미터 분기
+    # if target_weight < 100.0:
+    #     P_GAIN = 0.03
+    #     MAX_TILT_STEP = 3.0
+    #     STOP_THRESHOLD = 10.0
+    # else:
+    #     P_GAIN = 0.01
+    #     MAX_TILT_STEP = 1.0
+    #     STOP_THRESHOLD = 20.0
 
     # [추가] 타겟 종류에 맞는 튜닝 파라미터 설정
     tuning = TUBE_TUNING.get(tube_type, TUBE_TUNING["LARGE"])
