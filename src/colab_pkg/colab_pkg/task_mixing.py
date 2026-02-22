@@ -28,7 +28,6 @@ class TaskMixing(Node):
     def __init__(self):
         super().__init__('task_mixing', namespace=ROBOT_ID)
         
-        # [수정] 콜백 그룹 설정
         self.callback_group = ReentrantCallbackGroup()
         
         self.srv_mixing = self.create_service(
@@ -38,7 +37,6 @@ class TaskMixing(Node):
             callback_group=self.callback_group
         )
         
-        # [추가] 좌표값 클래스 멤버 변수로 초기화 (안전성을 위해 리스트로 저장)
         self.pos_home = [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]
         
         self.pos_beaker_pick       = [617.838, 138.024, 120.460, 142.800, 179.222, 142.231]
@@ -49,7 +47,8 @@ class TaskMixing(Node):
         self.pos_mixer_pick        = [87.752, 443.877, 236.217, 114.003, 179.135, 113.295]
         self.pos_mixer_pick_safe   = [87.752, 190.136, 236.217, 114.003, 179.135, 113.295]
         self.pos_mixer_mix_safe    = [349.592, 93.050, 233.490, 123.441, 179.314, 122.717]
-        self.pos_mixer_mix_down    = [349.592, 93.050, 125.172, 123.441, 179.314, 122.717]
+        # [수정] 첫 번째 코드의 좌표값(Z: 155.172) 반영
+        self.pos_mixer_mix_down    = [349.592, 93.050, 155.172, 123.441, 179.314, 122.717]
 
         self.get_logger().info("TaskMixing Ready. Service: execute_mixing")
 
@@ -60,7 +59,6 @@ class TaskMixing(Node):
         self.get_logger().info(f"[Service] Request Received. Mode: {mode}, Duration: {mixing_duration}s")
         
         try:
-            # [수정] self 객체를 전달하여 내부에서 멤버 변수에 접근하도록 구성
             self.perform_task(mixing_duration)
             response.success = True
             response.message = f"{mode} Mixing Completed Successfully"
@@ -71,14 +69,13 @@ class TaskMixing(Node):
             
         return response
 
-    # [수정] 함수 위치 이동 (클래스 내부 메서드로 통합)
     def perform_task(self, mixing_duration=10.0):
         from DSR_ROBOT2 import (
             movej, movel, posj, posx,
             set_digital_output, wait, set_robot_mode, ROBOT_MODE_AUTONOMOUS,
             task_compliance_ctrl, release_compliance_ctrl,
             set_desired_force, release_force, DR_FC_MOD_REL,
-            move_periodic, get_tool_force, get_current_posx,
+            move_periodic, get_tool_force, get_current_posx, amovel,
             DR_BASE, DR_TOOL
         )
 
@@ -135,7 +132,8 @@ class TaskMixing(Node):
             movel(posx(self.pos_mixer_pick_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             log("믹서 원위치 반환 완료")
 
-        def mixer_descend_and_wiggle(end_pos_list, fz_trigger=10.0, down_force=-10.0):
+        # [수정] 첫 번째 코드의 로직(amovel, 주석 처리된 movel 등) 그대로 적용
+        def mixer_descend_and_wiggle(end_pos_list, fz_trigger=7.0, down_force=-10.0):
             def _get_fz():     
                 ret = get_tool_force(DR_TOOL)
                 if ret is None or isinstance(ret, int) or len(ret) < 3:
@@ -154,11 +152,19 @@ class TaskMixing(Node):
             wait(0.1)
 
             log("1. 힘 감지 모드로 하강 시작 (외력 대기)")
+            
+            amovel(posx(end_pos_list), vel=10, acc=10, ref=DR_BASE)
+            
             while True:
+                fz = _get_fz()
+                log(f'현재 fz: {fz:.2f} N, 목표: {fz_trigger} N')
                 if _get_fz() >= fz_trigger:
                     log(f"[감지] 외력 도달 ({fz_trigger}N). Wiggle을 시작합니다.")
                     break
                 wait(0.1)
+
+            ret_pos = get_current_posx(DR_BASE)
+            curr_pos = list(ret_pos[0]) if isinstance(ret_pos, tuple) else list(ret_pos)
 
             log("2. 아래로 힘주며 하강 및 Wiggle 동시 수행")
             while True:
@@ -166,11 +172,28 @@ class TaskMixing(Node):
                 if curr_z <= target_z:
                     log(f"[도달] 목표 높이 도달 (현재 Z: {curr_z:.2f})")
                     break
-                move_periodic(amp=[0, 0, 0, 0, 0, 45.0], period=0.5, atime=0.2, repeat=1, ref=DR_TOOL)
+                    
+                # [추가] 2mm씩 Z축 하강 (주석 유지)
+                # curr_pos[2] -= 2.0
+                # if curr_pos[2] < target_z:
+                #     curr_pos[2] = target_z
+                    
+                # movel(posx(curr_pos), vel=10, acc=10, ref=DR_BASE)
+                
+                move_periodic(amp=[0, 0, -5, 0, 0, 15], 
+                              period=1.0, 
+                              atime=0.2, 
+                              repeat=1, 
+                              ref=DR_TOOL)
 
             log(f"3. 목표 도달 후 추가 혼합 ({mixing_duration}초)")
-            repeat_calc = max(1, int(mixing_duration / 0.5))
-            move_periodic(amp=[0, 0, 0, 0, 0, 45.0], period=0.5, atime=0.2, repeat=repeat_calc, ref=DR_TOOL)
+            # [수정] 혼합 시간에 따른 반복 횟수 동적 계산 적용 (period 2.0 기준)
+            repeat_calc = max(1, int(mixing_duration / 2.0))
+            move_periodic(amp=[0, 0, -5, 0, 0, 15], 
+                          period=2.0, 
+                          atime=0.2, 
+                          repeat=repeat_calc, 
+                          ref=DR_TOOL)
 
             release_force()
             release_compliance_ctrl()
@@ -187,7 +210,7 @@ class TaskMixing(Node):
         log("[3] 순응 제어 기반 혼합 시작")
         mixer_descend_and_wiggle(
             end_pos_list=self.pos_mixer_mix_down,
-            fz_trigger=10.0,
+            fz_trigger=7.0,
             down_force=-10.0
         )
 
@@ -224,7 +247,6 @@ def main(args=None):
     robot_node = rclpy.create_node("dsr_bridge_hidden", namespace=ROBOT_ID)
     DR_init.__dsr__node = robot_node
     
-    # [수정] 순서 보장: DR_init 세팅 후 TaskMixing 인스턴스화
     task_node = TaskMixing() 
 
     executor = MultiThreadedExecutor()
