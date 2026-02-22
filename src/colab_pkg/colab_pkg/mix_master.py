@@ -112,6 +112,15 @@ def perform_task(logger=None):
         set_desired_force(fd, dir=fctrl_dir, mod=DR_FC_MOD_REL)
         wait(0.1)
 
+        # [추가] Z축 하강 중 외력(바닥 접촉)이 감지될 때까지 Wiggle 대기 로직 추가
+        log("하강 중... 바닥 접촉 대기")
+        while True:
+            contact_fz = _safe_get_fz()
+            if contact_fz is not None and contact_fz >= 10.0:  # 10N을 접촉 기준으로 설정
+                log(f"외력 감지 (fz: {contact_fz:.2f}). Wiggle 시작.")
+                break
+            wait(0.1)
+
         move_periodic(
             amp=amp,
             period=period,
@@ -186,12 +195,29 @@ def perform_task(logger=None):
 
     # --- 3. 혼합하기 ---
     log("[3] 순응 제어 기반 혼합 시작")
+    
+    # [기존 로직 보존을 위한 주석 처리]
+    # compliance_wiggle(
+    #     force_z=-20,
+    #     amp=[0, 0, -5, 0, 0, 15],
+    #     period=1.0,
+    #     atime=0.2,
+    #     repeat=10,
+    #     stable_need=5,
+    #     stable_dt=0.5,
+    #     stable_min=10,
+    #     stable_max=80,
+    #     ref_force=DR_TOOL,
+    #     ref_periodic=DR_TOOL
+    # )
+
+    # [추가] 회전량 45도로 증가, 속도(주기) 0.5초로 단축, 짧아진 주기에 맞춰 repeat 횟수 20회로 증가
     compliance_wiggle(
         force_z=-20,
-        amp=[0, 0, -5, 0, 0, 15],
-        period=1.0,
+        amp=[0, 0, -5, 0, 0, 45],
+        period=0.5,
         atime=0.2,
-        repeat=10,
+        repeat=20,
         stable_need=5,
         stable_dt=0.5,
         stable_min=10,
