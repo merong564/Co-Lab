@@ -19,7 +19,6 @@ ROBOT_MODEL = "m0609"
 ROBOT_TOOL = "Tool Weight"
 ROBOT_TCP = "GripperDA_v1"
 
-# DSR_init 설정 (전역)
 DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
@@ -28,11 +27,10 @@ DR_init.__dsr__model = ROBOT_MODEL
 # ===============================
 class TaskMixing(Node):
     def __init__(self):
-        super().__init__('task_mixing', namespace=ROBOT_ID) # 노드 이름 지정
+        super().__init__('task_mixing', namespace=ROBOT_ID)
         
         self.callback_group = ReentrantCallbackGroup()
         
-        # 서비스 통신 노드 생성
         self.srv_mixing = self.create_service(
             RobotCommand,
             'execute_mixing',
@@ -43,12 +41,10 @@ class TaskMixing(Node):
 
     def execute_mixing_callback(self, request, response):
         mode = (getattr(request, "mode", "") or "").strip().upper()
-        # 컨트롤러/UI에서 전달된 mixing_duration 추출 (기본값 10.0초)
         mixing_duration = float(getattr(request, "mixing_duration", 10.0))
 
         self.get_logger().info(f"[Service] Request Received. Mode: {mode}, Duration: {mixing_duration}s")
         
-        # 믹싱 작업 수행
         try:
             perform_task(mixing_duration, logger=self.get_logger())
             response.success = True
@@ -82,7 +78,7 @@ def initialize_robot():
 
 
 # ===============================
-# 4. 핵심 작업 수행 로직 (외력 감지 + 믹싱)
+# 4. 핵심 작업 수행 로직 (팀원 수정사항 반영)
 # ===============================
 def perform_task(mixing_duration=10.0, logger=None):
     from DSR_ROBOT2 import (
@@ -105,19 +101,22 @@ def perform_task(mixing_duration=10.0, logger=None):
     J_VEL, J_ACC = 40, 40          
     L_VEL, L_ACC = 100, 100          
 
+    # [수정] 팀원 코드의 그리퍼 로직 반영 (DO 1, 2 사용)
     ON, OFF = 1, 0
 
     def gripper_open():
-        set_digital_output(2, ON)
+        log("그리퍼 열기")
         set_digital_output(1, OFF)
+        set_digital_output(2, ON)
         wait(2.0)
 
     def gripper_close():
+        log("그리퍼 닫기")
         set_digital_output(1, ON)
         set_digital_output(2, OFF)
         wait(2.0)
 
-    # 좌표 설정
+    # [좌표 확인] 팀원 코드와 동일하게 유지
     beaker_pick_x = posx(619.419, 137.199, 113.598, 148.997, 179.125, 148.536)
     beaker_up_x   = posx(406.705, 111.093, 203.088, 3.086, 178.554, -0.335)
     beaker_down_x = posx(303.736, 81.616, 86.386, 170.495, -178.848, 167.281)
@@ -135,73 +134,68 @@ def perform_task(mixing_duration=10.0, logger=None):
             return abs(float(f[2]))
         return None
 
-    # 특이점(Singularity) 회피를 위해 관절 각도 기반 Home 위치로 먼저 이동
+    # 특이점 회피를 위한 Home 이동
     P0_HOME = posj(0, 0, 90, 0, 90, 0)
-    log("[0] 초기 위치(Home)로 먼저 이동합니다. (특이점 회피)")
+    log("[0] 초기 위치(Home)로 이동")
     movej(P0_HOME, vel=J_VEL, acc=J_ACC)
-    wait(1.0)
+    wait(0.2)
 
-    # --- 1. 비커 이동 ---
+    # --- 1. 비커 이동 (팀원 코드에서 비활성화된 경우 필요시 주석 해제) ---
     log("[1] 비커 잡고 혼합 위치로 옮기기")
     gripper_open()
     movel(beaker_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     gripper_close()
-    
     movel(beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     movel(beaker_down_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     gripper_open()
+    wait(2.0)
     movel(beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
 
     # --- 2. 믹서 이동 ---
     log("[2] 믹서 잡고 혼합 위치로 옮기기")
+    movel(mixer_forward_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     movel(mixer_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     gripper_close()
     movel(mixer_forward_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     movel(mixer_beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    
-    # 믹서를 천천히 내리기 위한 세팅
-    movel(mixer_beaker_down_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     wait(0.2)
 
     # --- 3. 순응 제어 기반 외력 감지 및 혼합 ---
-    log("[3] 순응 제어 활성화 및 비즈 외력 대기 (실제 로봇 모드)")
+    log("[3] 순응 제어 활성화 및 바닥 접촉 대기")
     task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
     wait(0.1)
 
-    # Z축으로 누르는 힘 설정 (비즈에 닿기 위해 아래로 밀기)
+    # Z축 하강 힘 설정 (-20N)
     fd = [0, 0, -20, 0, 0, 0]
-    fctrl_dir = [0, 0, 1, 0, 0, 0]
-    set_desired_force(fd, dir=fctrl_dir, mod=DR_FC_MOD_REL)
-    wait(0.1)
-
-    # 실제 센서를 통해 비즈 외력(저항)이 3.0N 이상 감지될 때까지 대기
-    contact_threshold = 3.0
+    set_desired_force(fd, dir=[0, 0, 1, 0, 0, 0], mod=DR_FC_MOD_REL)
+    
+    # [수정] 팀원 업데이트 반영: 접촉 임계값 10.0N
+    contact_threshold = 10.0
     while True:
         contact_fz = _safe_get_fz()
-        
-        # 가짜 힘 발생 코드를 완전히 삭제하고 실제 센서값만 의존합니다.
         if contact_fz is not None and contact_fz >= contact_threshold:
-            log(f"비즈 외력 감지 성공 (fz: {contact_fz:.2f}N). 혼합을 시작합니다.")
+            log(f"외력 감지 성공 (fz: {contact_fz:.2f}). 믹싱 시작.")
             break
         wait(0.1)
 
-    # 믹싱 동작 (period=0.5초 기준, UI에서 받은 duration에 맞춰 반복 횟수 계산)
-    period = 0.5
-    repeat_count = max(1, int(mixing_duration / period))
-    log(f"총 {mixing_duration}초 간 혼합 진행 (반복 횟수: {repeat_count}회)")
-    
-    move_periodic(
-        amp=[0, 0, -5, 0, 0, 45], # 45도 회전
-        period=period,
-        atime=0.2,
-        repeat=repeat_count,
-        ref=DR_TOOL
-    )
-
-    # 힘 제어 및 순응 제어 해제
+    # 힘 제어 일시 해제 후 믹싱 모션 진입
     release_force()
     release_compliance_ctrl()
     wait(0.2)
+
+    # [수정] 팀원 업데이트 반영: 회전량 45도, 주기 0.5s
+    # 서비스로 받은 mixing_duration에 맞춰 repeat 횟수 계산
+    period = 0.5
+    repeat_calc = max(1, int(mixing_duration / period))
+    
+    log(f"믹싱 시작: {mixing_duration}초 ({repeat_calc}회 반복)")
+    move_periodic(
+        amp=[0, 0, -5, 0, 0, 45],
+        period=period,
+        atime=0.2,
+        repeat=repeat_calc,
+        ref=DR_TOOL
+    )
 
     # --- 4. 믹서 원위치 ---
     log("[4] 믹서 원위치 및 종료")
@@ -210,11 +204,12 @@ def perform_task(mixing_duration=10.0, logger=None):
     movel(mixer_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     gripper_open()
     movel(mixer_forward_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    movej(P0_HOME, vel=J_VEL, acc=J_ACC)
     
-    log("Task 완료됨")
+    log("Task 완료")
 
 # ===============================
-# 5. 메인
+# 5. 메인 (MultiThreadedExecutor 유지)
 # ===============================
 def main(args=None):
     rclpy.init(args=args)
