@@ -41,14 +41,8 @@ setup(
             'pour = colab_pkg.task_pouring:main',
             'scale = colab_pkg.scale_driver:main',
             'transfer = colab_pkg.task_transfer:main',
-            'mixing = colab_pkg.task_mixing:main',
-<<<<<<< Updated upstream
-
-            
+            'mixing = colab_pkg.task_mixing:main',            
             'gripper_test = colab_pkg.gripper_test:main',
-=======
-            'mixing_copy = colab_pkg.task_mixing_copy:main'
->>>>>>> Stashed changes
             
         ],
     },
