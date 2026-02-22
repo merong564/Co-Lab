@@ -28,11 +28,10 @@ DR_init.__dsr__model = ROBOT_MODEL
 # ===============================
 class TaskMixing(Node):
     def __init__(self):
-        super().__init__('task_mixing', namespace=ROBOT_ID) # 노드 이름 지정
+        super().__init__('', namespace=ROBOT_ID)
         
         self.callback_group = ReentrantCallbackGroup()
         
-        # 서비스 통신 노드 생성
         self.srv_mixing = self.create_service(
             RobotCommand,
             'execute_mixing',
@@ -43,7 +42,7 @@ class TaskMixing(Node):
 
     def execute_mixing_callback(self, request, response):
         mode = (getattr(request, "mode", "") or "").strip().upper()
-        # 컨트롤러/UI에서 전달된 mixing_duration 추출 (기본값 10.0초)
+        # UI에서 전달된 mixing_duration 추출 (기본값 설정)
         mixing_duration = float(getattr(request, "mixing_duration", 10.0))
 
         self.get_logger().info(f"[Service] Request Received. Mode: {mode}, Duration: {mixing_duration}s")
@@ -135,12 +134,6 @@ def perform_task(mixing_duration=10.0, logger=None):
             return abs(float(f[2]))
         return None
 
-    # 특이점(Singularity) 회피를 위해 관절 각도 기반 Home 위치로 먼저 이동
-    P0_HOME = posj(0, 0, 90, 0, 90, 0)
-    log("[0] 초기 위치(Home)로 먼저 이동합니다. (특이점 회피)")
-    movej(P0_HOME, vel=J_VEL, acc=J_ACC)
-    wait(1.0)
-
     # --- 1. 비커 이동 ---
     log("[1] 비커 잡고 혼합 위치로 옮기기")
     gripper_open()
@@ -164,22 +157,20 @@ def perform_task(mixing_duration=10.0, logger=None):
     wait(0.2)
 
     # --- 3. 순응 제어 기반 외력 감지 및 혼합 ---
-    log("[3] 순응 제어 활성화 및 비즈 외력 대기 (실제 로봇 모드)")
+    log("[3] 순응 제어 활성화 및 비즈 외력 대기")
     task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
     wait(0.1)
 
-    # Z축으로 누르는 힘 설정 (비즈에 닿기 위해 아래로 밀기)
+    # Z축으로 누르는 힘 설정 (비즈에 닿기 위해)
     fd = [0, 0, -20, 0, 0, 0]
     fctrl_dir = [0, 0, 1, 0, 0, 0]
     set_desired_force(fd, dir=fctrl_dir, mod=DR_FC_MOD_REL)
     wait(0.1)
 
-    # 실제 센서를 통해 비즈 외력(저항)이 3.0N 이상 감지될 때까지 대기
-    contact_threshold = 3.0
+    # 외력(비즈 저항)이 감지될 때까지 대기
+    contact_threshold =3.0 # 10N을 접촉 기준으로 설정 (필요시 조정)
     while True:
         contact_fz = _safe_get_fz()
-        
-        # 가짜 힘 발생 코드를 완전히 삭제하고 실제 센서값만 의존합니다.
         if contact_fz is not None and contact_fz >= contact_threshold:
             log(f"비즈 외력 감지 성공 (fz: {contact_fz:.2f}N). 혼합을 시작합니다.")
             break
