@@ -75,14 +75,8 @@ class TaskTransfer(Node):
 
         mode = (getattr(request, "mode", "") or "").strip().upper()
 
-        user_input = input("시험관 크기를 입력하세요 (0: SMALL, 1: LARGE): ").strip()
-        if user_input == "0":
-            tube_type = "SMALL"
-        elif user_input == "1":
-            tube_type = "LARGE"
-        else:
-            self.get_logger().error("잘못된 입력입니다. 기본값 LARGE로 설정합니다.")
-            tube_type = "LARGE"
+        # [추가] 서비스 request 데이터에서 시험관 종류를 동적으로 파악
+        tube_type = getattr(request, "target", "LARGE").strip().upper()
 
         self.get_logger().info(f"[Service] Request Received. Mode: {mode}, Tube: {tube_type}")
 
@@ -99,20 +93,35 @@ class TaskTransfer(Node):
 
 
 # ===============================
-# 2. 로봇 제어 로직 (원본 유지 + STOP 체크만 추가)
+# 2. 로봇 제어 로직
 # ===============================
 def get_poses(posx_func):
     return {
-        "SMALL": {
-            "PICK_DOWN": posx_func(555.786, -78.524, 126.047, 90.674, 92.519, 93.656),
-            "PICK_UP":   posx_func(555.784, -78.523, 259.725, 90.674, 92.518, 93.657),
-            "POUR_READY": posx_func(604.441, 157.760, 242.631, 91.920, 97.360, 88.550),
-        },
         "LARGE": {
             "PICK_DOWN": posx_func(306.636, -66.725,  109.141, 91.356, 91.786, 90.102),
             "PICK_UP":   posx_func(306.636, -66.725, 257.898, 91.356, 91.786, 90.102),
             "POUR_UP": posx_func(585.440, 157.760, 242.631, 91.920, 97.360, 88.550),
             "POUR_READY": posx_func(585.440, 157.760, 180.631, 91.920, 97.360, 88.550),
+            "RETURN_UP": posx_func(417.368, 608.704, 260.356, 90.362, 91.682, 89.077),
+            "RETURN_DOWN": posx_func(417.368, 608.704, 104.231, 90.362, 91.682, 89.077)
+        },
+        "SMALL1": {
+            "PICK_DOWN": posx_func(333.096, 373.067, 138.164, 91.215, 89.984, 92.903),
+            "PICK_UP": posx_func(333.096, 373.067, 224.104, 91.215, 89.984, 92.903),
+            "POUR_UP": posx_func(585.440, 157.760, 190.631, 91.920, 97.360, 88.550),
+            "POUR_READY": posx_func(585.440, 157.760, 160.631, 91.920, 97.360, 88.550)
+        },
+        "SMALL2": {
+            "PICK_DOWN": posx_func(217.794, 377.263, 133.564, 121.034, 93.617, 92.329),
+            "PICK_UP": posx_func(216.423, 384.357, 282.484, 120.725, 94.227, 91.915),
+            "POUR_UP": posx_func(585.440, 157.760, 190.631, 91.920, 97.360, 88.550),
+            "POUR_READY": posx_func(585.440, 157.760, 160.631, 91.920, 97.360, 88.550)
+        },
+        "BEAKER": {
+            "PICK_DOWN": posx_func(303.736, 81.616, 86.386, 170.495, -178.848, 167.281),
+            "PICK_UP": posx_func(303.736, 81.616, 230.386, 170.495, -178.848, 167.281),
+            "RETURN_UP": posx_func(368.058, 473.059, 230.706, 19.522, 178.596, 15.563),
+            "RETURN_DOWN": posx_func(368.058, 473.059, 82.706, 19.522, 178.596, 15.563)
         }
     }
 
@@ -133,24 +142,17 @@ def initialize_robot():
 def perform_task(mode, tube_type):
     global STOP_REQUESTED
     from DSR_ROBOT2 import movej, movel, posx, wait, set_digital_output, DR_BASE
-    from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
+    from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS
     
     set_robot_mode(ROBOT_MODE_MANUAL)
     set_tcp(ROBOT_TCP)
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
     time.sleep(0.5)
 
-    # 좌표 데이터 로드
-    try:
-        POSES = get_poses(posx)
-    except Exception:
-        print(" Error: DSR Library not ready")
-        return
-
+    POSES = get_poses(posx)
     J_READY = [0, 0, 90, 0, 90, 0]
     ON, OFF = 1, 0
 
-    # [추가] STOP 체크 함수(최소 추가)
     def _check_stop(tag=""):
         global STOP_REQUESTED
         if STOP_REQUESTED:
@@ -161,67 +163,143 @@ def perform_task(mode, tube_type):
         set_digital_output(1, OFF)
         wait(2.0)
 
+    def gripper_large_open():
+        set_digital_output(3, ON)
+        set_digital_output(4, OFF)
+        wait(2.0)
+
     def gripper_close():
         set_digital_output(1, ON)
         set_digital_output(2, OFF)
         wait(2.0)
+        
+    def target_gripper_open():
+        if tube_type == "LARGE":
+            gripper_large_open()
+        else:
+            gripper_open()
+
+    # [추가] 모듈화된 작업 함수들 정의
+    def _pickup_tube_common(P):
+        _check_stop("before movej ready")
+        movej(J_READY, vel=VEL, acc=ACC)
+        wait(0.5)
+        _check_stop("before target_gripper_open")
+        target_gripper_open()
+        _check_stop("before movel PICK_UP")
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel PICK_DOWN")
+        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before gripper_close")
+        gripper_close()
+        _check_stop("before movel PICK_UP(2)")
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel POUR_UP")
+        movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel POUR_READY")
+        movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+
+    def pickup_large(P):
+        _pickup_tube_common(P)
+
+    def pickup_small(P):
+        _pickup_tube_common(P)
+
+    def pickup_beaker(P):
+        # POUR 위치가 없는 비커의 기본 픽업
+        _check_stop("before movej ready")
+        movej(J_READY, vel=VEL, acc=ACC)
+        wait(0.5)
+        _check_stop("before target_gripper_open")
+        target_gripper_open()
+        _check_stop("before movel PICK_UP")
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel PICK_DOWN")
+        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before gripper_close")
+        gripper_close()
+        _check_stop("before movel PICK_UP(2)")
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
+    def return_large(P):
+        _check_stop("before movel POUR_READY to POUR_UP")
+        movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+        movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel RETURN_UP")
+        movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel RETURN_DOWN")
+        movel(P["RETURN_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before target_gripper_open")
+        target_gripper_open()
+        _check_stop("before movel RETURN_UP(2)")
+        movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movej ready")
+        movej(J_READY, vel=VEL, acc=ACC)
+
+    def return_small(P):
+        _check_stop("before movel POUR_READY to POUR_UP")
+        movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+        movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel PICK_UP")
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel PICK_DOWN")
+        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before target_gripper_open")
+        target_gripper_open()
+        _check_stop("before movel PICK_UP(2)")
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movej ready")
+        movej(J_READY, vel=VEL, acc=ACC)
+
+    def return_beaker(P):
+        # 지시해주신 비커 전용 단일 시퀀스 
+        _check_stop("before target_gripper_open")
+        target_gripper_open()
+        _check_stop("before movel PICK_UP")
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel PICK_DOWN")
+        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before gripper_close")
+        gripper_close()
+        _check_stop("before movel PICK_UP(2)")
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel RETURN_UP")
+        movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel RETURN_DOWN")
+        movel(P["RETURN_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before target_gripper_open")
+        target_gripper_open()
+        _check_stop("before movel RETURN_UP(2)")
+        movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movej ready")
+        movej(J_READY, vel=VEL, acc=ACC)
 
     try:
         P = POSES[tube_type]
 
+        # [추가] 간소화된 분기 제어문
         if mode == "PICKUP":
             print(f"[Action] PICKUP Start ({tube_type})")
-
-            _check_stop("before movej ready")
-            movej(J_READY, vel=VEL, acc=ACC)
-            wait(0.5)
-
-            _check_stop("before gripper_open")
-            gripper_open()
-
-            _check_stop("before movel PICK_UP")
-            movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-            _check_stop("before movel PICK_DOWN")
-            movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-            _check_stop("before gripper_close")
-            gripper_close()
-
-            _check_stop("before movel PICK_UP(2)")
-            movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-            _check_stop("before movel PICK_UP(2)")
-            movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-            _check_stop("before movel POUR_READY")
-            movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
-
+            if tube_type == "LARGE":
+                pickup_large(P)
+            elif tube_type in ["SMALL1", "SMALL2"]:
+                pickup_small(P)
+            elif tube_type == "BEAKER":
+                pickup_beaker(P)
             print("[Action] PICKUP Done")
 
         elif mode == "RETURN":
             print(f"[Action] RETURN Start ({tube_type})")
-
-            _check_stop("before movel PICK_UP")
-            movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-            _check_stop("before movel PICK_DOWN")
-            movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-            _check_stop("before gripper_open")
-            gripper_open()
-
-            _check_stop("before movel PICK_UP(2)")
-            movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-            _check_stop("before movej ready")
-            movej(J_READY, vel=VEL, acc=ACC)
-
+            if tube_type == "LARGE":
+                return_large(P)
+            elif tube_type in ["SMALL1", "SMALL2"]:
+                return_small(P)
+            elif tube_type == "BEAKER":
+                return_beaker(P)
             print("[Action] RETURN Done")
 
     except Exception as e:
         print(f" [Action] Failed: {e}")
-        # 여기서 다시 raise 하면 서비스가 실패로 응답됨(원하는 “에러로 정지” 유지)
         raise
 
 
