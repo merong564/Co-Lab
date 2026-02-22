@@ -83,10 +83,10 @@ def perform_task(logger=None):
         set_digital_output(2, OFF)
         wait(2.0)
 
-    # ✅ 네가 준 방식 그대로: 순응+힘제어+periodic+stable 체크
+    # 순응+힘제어+periodic+stable 체크
     def compliance_wiggle(
-        force_z=-20,                 # fd z
-        amp=[0, 0, -5, 0, 0, 15],     # 네 값 그대로
+        force_z=-20,
+        amp=[0, 0, -5, 0, 0, 15],
         period=1.0,
         atime=0.2,
         repeat=10,
@@ -104,17 +104,14 @@ def perform_task(logger=None):
                 return abs(float(f[2]))
             return None
 
-        # 순응 활성화
         task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
         wait(0.1)
 
-        # Z축 기준 힘 인가(네 방식)
         fd = [0, 0, float(force_z), 0, 0, 0]
         fctrl_dir = [0, 0, 1, 0, 0, 0]
         set_desired_force(fd, dir=fctrl_dir, mod=DR_FC_MOD_REL)
         wait(0.1)
 
-        # periodic (네 값 그대로)
         move_periodic(
             amp=amp,
             period=period,
@@ -123,7 +120,6 @@ def perform_task(logger=None):
             ref=ref_periodic
         )
 
-        # stable 체크 (네 로직 그대로)
         stable = 0
         while stable < stable_need:
             fz = _safe_get_fz()
@@ -139,106 +135,60 @@ def perform_task(logger=None):
 
             wait(stable_dt)
 
-        # 종료
         release_force()
         release_compliance_ctrl()
         wait(0.2)
 
-    # 홈 (조인트 홈은 movej 유지)
     P0_HOME = posj(0, 0, 90, 0, 90, 0)
 
-    # 픽업 좌표 (posx) - 베이스 기준
-    P_PICK_DOWN = posx(448.18, -180.31, 118.12, 110.37, -179.05, 110.13)
-    P_PICK_UP   = posx(448.58, -179.86, 207.30, 104.66, -179.86, 104.49)
+    # [수정] 요청된 비커 이동 좌표 반영
+    beaker_pick_x = posx(619.419, 137.199, 113.598, 148.997, 179.125, 148.536)
+    beaker_up_x   = posx(406.705, 111.093, 203.088, 3.086, 178.554, -0.335)
+    beaker_down_x = posx(303.736, 81.616, 86.386, 170.495, -178.848, 167.281)
 
-    # 비커 BEFORE/AFTER (posx) - 네 placeholder 유지
-    BEAKER_AFTER_X   = posx(340.96, 84.35, 136.51, 26.49, -179.49, 26.20)
-    BEAKER_BEFORE_X  = posx(340.96, 84.35, 276.83, 26.49, -179.49, 26.20)
+    # [수정] 요청된 믹서 이동 좌표 반영
+    mixer_pick_x        = posx(87.752, 443.877, 236.217, 114.003, 179.135, 113.295)
+    mixer_forward_x     = posx(87.752, 190.136, 236.217, 114.003, 179.135, 113.295)
+    mixer_beaker_up_x   = posx(349.592, 93.050, 233.490, 123.441, 179.314, 122.717)
+    mixer_beaker_down_x = posx(349.592, 93.050, 125.172, 123.441, 179.314, 122.717)
 
-    # =========================
-    # 비커 삽입 flow (네 기존 유지)
-    # - 단, periodic 방식은 "네 compliance 방식"으로 바꾸고 싶으면
-    #   triggered 시점/AFTER 도착 후에 compliance_wiggle() 호출하면 됨.
-    # =========================
-    def beaker_insert_flow(
-        before_x,
-        after_x,
-        fz_trigger=4.5,
-        vel_slow=30, acc_slow=30,
-        steps=80
-    ) -> bool:
-        def _safe_get_fz():
-            ret = get_tool_force(DR_TOOL)
-            f = ret[0] if isinstance(ret, tuple) else ret
-            if isinstance(f, (list, tuple)) and len(f) >= 3:
-                return abs(float(f[2]))
-            return None
-
-        b = [before_x[0], before_x[1], before_x[2], before_x[3], before_x[4], before_x[5]]
-        a = [after_x[0],  after_x[1],  after_x[2],  after_x[3],  after_x[4],  after_x[5]]
-
-        movel(before_x, vel=vel_slow, acc=acc_slow, ref=DR_BASE)
-        wait(0.2)
-
-        triggered = False
-
-        for i in range(1, steps + 1):
-            t = i / float(steps)
-            x = [b[k] + (a[k] - b[k]) * t for k in range(6)]
-            movel(posx(*x), vel=vel_slow, acc=acc_slow, ref=DR_BASE)
-
-            if not triggered:
-                fz = _safe_get_fz()
-                if fz is not None and fz >= fz_trigger:
-                    triggered = True
-                    log(f"[force] TRIGGERED at step {i}/{steps} (fz={fz:.2f} >= {fz_trigger})")
-
-            wait(0.05)
-
-        # ✅ AFTER 도착 후 회전방식 = 네 compliance 방식으로 수행하고 싶으면 여기서 실행
-        # (원하면 triggered 조건 걸고, 아니면 항상 실행)
-        if triggered:
-            compliance_wiggle(
-                force_z=-20,
-                amp=[0, 0, -5, 0, 0, 15],
-                period=1.0,
-                atime=0.2,
-                repeat=10,
-                stable_need=5,
-                stable_dt=0.5,
-                stable_min=10,
-                stable_max=80,
-                ref_force=DR_TOOL,
-                ref_periodic=DR_TOOL
-            )
-
-        return triggered
 
     # =========================
-    # ✅ 전체 흐름
+    # 전체 흐름
     # =========================
-    log("[0] Go HOME first (movej)")
-    movej(P0_HOME, vel=J_VEL, acc=J_ACC)
-    wait(0.2)
+    # log("[0] Go HOME first (movej)")
+    # movej(P0_HOME, vel=J_VEL, acc=J_ACC)
+    # wait(0.2)
 
-    log("[1] Pick: OPEN -> PICK_DOWN (movel)")
+    # [추가] 1. 비커 잡고 혼합 위치로 옮기기 활성화 및 로직 수정
+    log("[1] 비커 잡고 혼합 위치로 옮기기")
     gripper_open()
-    movel(P_PICK_DOWN, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    movel(beaker_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    gripper_close()
+    wait(2.0)
+
+    movel(beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    movel(beaker_down_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+
+    gripper_open()
+    wait(2.0)
+    movel(beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+
+    # [수정] 2. 믹서 잡고 혼합 위치로 옮기기
+    log("[2] 믹서 잡고 혼합 위치로 옮기기")
+    movel(mixer_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    gripper_close()
+    wait(2.0)
+    movel(mixer_forward_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    movel(mixer_beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    movel(mixer_beaker_down_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     wait(0.2)
 
-    # ✅ 여기!! 너가 요청한 부분:
-    # P_PICK_UP에서 P_PICK_DOWN으로 내려갈 때 "네 compliance 회전 방식" 적용
-    log("[1.5] Go PICK_UP (movel)")
-    movel(P_PICK_UP, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    wait(0.2)
-
-    log("[1.6] Down to PICK_DOWN (movel) -> compliance_wiggle (your rotation method)")
-    movel(P_PICK_DOWN, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    wait(0.2)
-
+    # --- 3. 혼합하기 ---
+    log("[3] 순응 제어 기반 혼합 시작")
     compliance_wiggle(
         force_z=-20,
-        amp=[0, 0, -5, 0, 0, 15],   # ✅ 네 각도/시간 그대로
+        amp=[0, 0, -5, 0, 0, 15],
         period=1.0,
         atime=0.2,
         repeat=10,
@@ -250,40 +200,14 @@ def perform_task(logger=None):
         ref_periodic=DR_TOOL
     )
 
-    log("[2] Pick: CLOSE")
-    gripper_close()
-
-    log("[3] Pick: LIFT to PICK_UP (movel)")
-    movel(P_PICK_UP, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    wait(0.2)
-
-    log("[4] Go BEAKER_BEFORE_X (movel, DR_BASE)")
-    movel(BEAKER_BEFORE_X, vel=30, acc=30, ref=DR_BASE)
-    wait(0.2)
-
-    log("[5] Beaker insert (movel interpolation + force trigger)")
-    triggered = beaker_insert_flow(
-        BEAKER_BEFORE_X,
-        BEAKER_AFTER_X,
-        fz_trigger=4.5,
-        vel_slow=30, acc_slow=30,
-        steps=80
-    )
-
-    log(f"[6] insert done. triggered={triggered}")
-
-    movel(BEAKER_BEFORE_X, vel=30, acc=30, ref=DR_BASE)
-    wait(0.2)
-
-    # 마무리: PICK_UP -> PICK_DOWN -> OPEN -> HOME
-    movel(P_PICK_UP, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    wait(0.2)
-
-    movel(P_PICK_DOWN, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    wait(0.2)
-
+    # [수정] 4. 믹서 원위치 및 종료
+    log("[4] 믹서 원위치 및 종료")
+    movel(mixer_beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    movel(mixer_forward_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    movel(mixer_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     gripper_open()
-
+    wait(2.0)
+    movel(mixer_forward_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     movej(P0_HOME, vel=J_VEL, acc=J_ACC)
     wait(0.2)
 
