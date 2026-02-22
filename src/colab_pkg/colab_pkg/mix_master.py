@@ -44,8 +44,8 @@ def perform_task(logger=None):
     from DSR_ROBOT2 import (
         movej, movel,
         posj, posx,
-        set_digital_output, wait,
-        set_robot_mode, ROBOT_MODE_AUTONOMOUS,
+        set_digital_output, get_digital_input, wait,
+        set_robot_mode, ROBOT_MODE_AUTONOMOUS, 
 
         # compliance/force
         task_compliance_ctrl, release_compliance_ctrl,
@@ -73,21 +73,31 @@ def perform_task(logger=None):
     # 그리퍼 DO
     ON, OFF = 1, 0
 
+    # 디지털 입력 신호 대기 함수
+    def wait_digital_input(sig_num):
+        while not get_digital_input(sig_num):
+            log("디지털 입력 {sig_num} 대기 중...")
+            wait(0.5)
+
     def gripper_open():
-        set_digital_output(2, ON)
+        log("그리퍼 열기")
         set_digital_output(1, OFF)
+        set_digital_output(2, ON)
+        #wait_digital_input(2)
         wait(2.0)
 
     def gripper_close():
+        log("그리퍼 닫기")
         set_digital_output(1, ON)
         set_digital_output(2, OFF)
+        #wait_digital_input(1)
         wait(2.0)
 
     # 순응+힘제어+periodic+stable 체크
     def compliance_wiggle(
         force_z=-20,
-        amp=[0, 0, -5, 0, 0, 15],
-        period=1.0,
+        amp=[0, 0, -5, 0, 0, 5],  # Z로 5mm 내려가면서 30도 회전
+        period=200.0,
         atime=0.2,
         repeat=10,
         stable_need=5,
@@ -104,6 +114,7 @@ def perform_task(logger=None):
                 return abs(float(f[2]))
             return None
 
+        # 순응 제어 활성화
         task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
         wait(0.1)
 
@@ -120,33 +131,35 @@ def perform_task(logger=None):
                 log(f"외력 감지 (fz: {contact_fz:.2f}). Wiggle 시작.")
                 break
             wait(0.1)
-
-        move_periodic(
-            amp=amp,
-            period=period,
-            atime=atime,
-            repeat=repeat,
-            ref=ref_periodic
-        )
-
-        stable = 0
-        while stable < stable_need:
-            fz = _safe_get_fz()
-            if fz is None:
-                log("[WARN] get_tool_force failed/None")
-                stable = 0
-            else:
-                log(f"fz:{fz:.2f}")
-                if (fz >= stable_min) and (fz <= stable_max):
-                    stable += 1
-                else:
-                    stable = 0
-
-            wait(stable_dt)
-
+        
         release_force()
         release_compliance_ctrl()
         wait(0.2)
+
+        move_periodic(
+            amp=[0, 0, -5, 0, 0, 15],
+            period=2.0,
+            atime=0.2,
+            repeat=5,
+            ref=DR_TOOL
+        )
+
+        # stable = 0
+        # while stable < stable_need:
+        #     fz = _safe_get_fz()
+        #     if fz is None:
+        #         log("[WARN] get_tool_force failed/None")
+        #         stable = 0
+        #     else:
+        #         log(f"fz:{fz:.2f}")
+        #         if (fz >= stable_min) and (fz <= stable_max):
+        #             stable += 1
+        #         else:
+        #             stable = 0
+
+        #     wait(stable_dt)
+        #wait(period * repeat)
+        
 
     P0_HOME = posj(0, 0, 90, 0, 90, 0)
 
@@ -170,27 +183,31 @@ def perform_task(logger=None):
     # wait(0.2)
 
     # [추가] 1. 비커 잡고 혼합 위치로 옮기기 활성화 및 로직 수정
-    log("[1] 비커 잡고 혼합 위치로 옮기기")
-    gripper_open()
-    movel(beaker_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    gripper_close()
-    wait(2.0)
+    
+    # log("[1] 비커 잡고 혼합 위치로 옮기기")
+    # gripper_open()
+    # log("비커 픽업")
+    # movel(beaker_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # gripper_close()
+    # wait(2.0)
 
-    movel(beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    movel(beaker_down_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # log("혼합 위치 위로 옮기기")
+    # movel(beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # log("혼합 위치로 내리기")
+    # movel(beaker_down_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
 
-    gripper_open()
-    wait(2.0)
-    movel(beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # gripper_open()
+    # wait(2.0)
+    # movel(beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
 
-    # [수정] 2. 믹서 잡고 혼합 위치로 옮기기
-    log("[2] 믹서 잡고 혼합 위치로 옮기기")
-    movel(mixer_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    gripper_close()
-    wait(2.0)
-    movel(mixer_forward_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # # [수정] 2. 믹서 잡고 혼합 위치로 옮기기
+    # log("[2] 믹서 잡고 혼합 위치로 옮기기")
+    # movel(mixer_forward_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # movel(mixer_pick_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # gripper_close()
+    # movel(mixer_forward_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     movel(mixer_beaker_up_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    movel(mixer_beaker_down_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    #movel(mixer_beaker_down_x, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
     wait(0.2)
 
     # --- 3. 혼합하기 ---
