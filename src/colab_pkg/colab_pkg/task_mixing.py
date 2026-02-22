@@ -1,3 +1,4 @@
+# task_mixing 서비스 노드를 만들어 놓은 거 
 #!/usr/bin/env python3
 import time
 import rclpy
