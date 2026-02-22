@@ -53,7 +53,7 @@ def perform_task(logger=None):
         DR_FC_MOD_REL,
 
         # periodic / force read
-        move_periodic, get_tool_force, get_current_posx,
+        move_periodic, get_tool_force, get_current_posx, amovel,
 
         DR_BASE, DR_TOOL
     )
@@ -88,7 +88,7 @@ def perform_task(logger=None):
    # [수정] 복잡한 보간 로직을 제거하고, 순응 제어 하강과 좌표 확인 방식으로 재구성
     def mixer_descend_and_wiggle(
         end_posx,
-        fz_trigger=10.0,    # tool에 가해지는 힘이 이 값 이상이면 혼합 시작
+        fz_trigger=7.0,    # tool에 가해지는 힘이 이 값 이상이면 혼합 시작
         down_force=-10.0  # Z축으로 누르며 내려갈 힘]
     ):
         def _get_fz():     # 툴에 걸리는 z축 방향 힘 읽어오는 함수
@@ -114,12 +114,19 @@ def perform_task(logger=None):
 
         log("1. 힘 감지 모드로 하강 시작 (외력 대기)")
         
+        amovel(posx(end_posx), vel=10, acc=10, ref=DR_BASE)
+        
         # 2. 설정된 외력(fz_trigger)이 감지될 때까지 대기
         while True:
+            fz = _get_fz()
+            log(f'현재 fz: {fz:.2f} N, 목표: {fz_trigger} N')
             if _get_fz() >= fz_trigger:
                 log(f"[감지] 외력 도달 ({fz_trigger}N). Wiggle을 시작합니다.")
                 break
             wait(0.1)   # 0.1초마다 외력 체크
+
+        ret_pos = get_current_posx(DR_BASE)
+        curr_pos = list(ret_pos[0]) if isinstance(ret_pos, tuple) else list(ret_pos)
 
         # 3. 외력 감지 이후: 목표 Z 높이(pos_mixer_mix_down)에 도달할 때까지 Wiggle 수행
         log("2. 아래로 힘주며 하강 및 Wiggle 동시 수행")
@@ -128,18 +135,25 @@ def perform_task(logger=None):
             if curr_z <= target_z:
                 log(f"[도달] 목표 높이 도달 (현재 Z: {curr_z:.2f})")
                 break
+                
+            # [추가] 2mm씩 Z축 하강
+            # curr_pos[2] -= 2.0
+            # if curr_pos[2] < target_z:
+            #     curr_pos[2] = target_z
+                
+            # movel(posx(curr_pos), vel=10, acc=10, ref=DR_BASE)
             
             # Wiggle 1회전 수행 (이 코드가 도는 동안에도 힘 제어에 의해 계속 하강 중임)
-            move_periodic(amp=[0, 0, 0, 0, 0, 45.0],    # 회전 각도 45도
-                          period=0.5, 
+            move_periodic(amp=[0, 0, -5, 0, 0, 15],    # 회전 각도 45도
+                          period=1.0, 
                           atime=0.2, 
                           repeat=1, 
                           ref=DR_TOOL)
 
         # 4. 목표 도달 후 10번 제자리 추가 회전
         log(f"3. 목표 도달 후 추가 혼합")
-        move_periodic(amp=[0, 0, 0, 0, 0, 45.0], 
-                        period=0.5, 
+        move_periodic(amp=[0, 0, -5, 0, 0, 15], 
+                        period=2.0, 
                         atime=0.2, 
                         repeat=10, 
                         ref=DR_TOOL)
@@ -161,7 +175,7 @@ def perform_task(logger=None):
     pos_mixer_pick        = posx(87.752, 443.877, 236.217, 114.003, 179.135, 113.295)     # 믹서 잡는 위치
     pos_mixer_pick_safe   = posx(87.752, 190.136, 236.217, 114.003, 179.135, 113.295)     # 믹서 잡기 전후로 y축으로만 이동하는 좌표
     pos_mixer_mix_safe    = posx(349.592, 93.050, 233.490, 123.441, 179.314, 122.717)     # 믹서 잡은 상태에서 비커 위로 이동한 좌표
-    pos_mixer_mix_down    = posx(349.592, 93.050, 125.172, 123.441, 179.314, 122.717)     # 혼합 시 믹서를 최대로 내리는 좌표
+    pos_mixer_mix_down    = posx(349.592, 93.050, 155.172, 123.441, 179.314, 122.717)     # 혼합 시 믹서를 최대로 내리는 좌표
 
 
     # 비커 Pick & Place 전용 함수
@@ -209,13 +223,13 @@ def perform_task(logger=None):
     # 1. 비커 혼합 위치로 이동
     pick_and_place_beaker()
 
-    # 2. 믹서를 비커 위 준비 위치로 이동
+    # # 2. 믹서를 비커 위 준비 위치로 이동
     pick_and_ready_mixer()
     wait(0.2)
 
     # 믹서 잡은 채로 대기한 상태에서 시작하고 싶을 경우
-    #movel(pos_mixer_mix_safe, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-    #wait(0.2)
+    # movel(pos_mixer_mix_safe, vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+    # wait(0.2)
 
     # 3. 혼합하기
     log("[3] 순응 제어 기반 혼합 시작")
@@ -223,7 +237,7 @@ def perform_task(logger=None):
     # [추가] 분할 하강 및 Wiggle 동시 제어 로직 실행
     mixer_descend_and_wiggle(
         end_posx=pos_mixer_mix_down,
-        fz_trigger=10.0,
+        fz_trigger=7.0,
         down_force=-10.0
     )
 
