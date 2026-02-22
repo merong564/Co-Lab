@@ -42,6 +42,9 @@ setup(
             'scale = colab_pkg.scale_driver:main',
             'transfer = colab_pkg.task_transfer:main',
             'mixing = colab_pkg.task_mixing:main',
+
+            
+            'gripper_test = colab_pkg.gripper_test:main',
             
         ],
     },
