@@ -28,11 +28,10 @@ DR_init.__dsr__model = ROBOT_MODEL
 # ===============================
 class TaskMixing(Node):
     def __init__(self):
-        super().__init__('task_mixing', namespace=ROBOT_ID) # 노드 이름 지정
+        super().__init__('task_mixing', namespace=ROBOT_ID) # 이름 명시
         
         self.callback_group = ReentrantCallbackGroup()
         
-        # 서비스 통신 노드 생성
         self.srv_mixing = self.create_service(
             RobotCommand,
             'execute_mixing',
@@ -43,7 +42,7 @@ class TaskMixing(Node):
 
     def execute_mixing_callback(self, request, response):
         mode = (getattr(request, "mode", "") or "").strip().upper()
-        # 컨트롤러/UI에서 전달된 mixing_duration 추출 (기본값 10.0초)
+        # UI에서 전달된 mixing_duration 추출 (기본값 설정)
         mixing_duration = float(getattr(request, "mixing_duration", 10.0))
 
         self.get_logger().info(f"[Service] Request Received. Mode: {mode}, Duration: {mixing_duration}s")
@@ -135,11 +134,13 @@ def perform_task(mixing_duration=10.0, logger=None):
             return abs(float(f[2]))
         return None
 
-    # 특이점(Singularity) 회피를 위해 관절 각도 기반 Home 위치로 먼저 이동
+    # -------------------------------------------------------------------
+    # [추가됨] 특이점(Singularity) 회피를 위해 관절 각도 기반 Home 위치로 먼저 이동
     P0_HOME = posj(0, 0, 90, 0, 90, 0)
     log("[0] 초기 위치(Home)로 먼저 이동합니다. (특이점 회피)")
     movej(P0_HOME, vel=J_VEL, acc=J_ACC)
     wait(1.0)
+    # -------------------------------------------------------------------
 
     # --- 1. 비커 이동 ---
     log("[1] 비커 잡고 혼합 위치로 옮기기")
@@ -164,22 +165,30 @@ def perform_task(mixing_duration=10.0, logger=None):
     wait(0.2)
 
     # --- 3. 순응 제어 기반 외력 감지 및 혼합 ---
-    log("[3] 순응 제어 활성화 및 비즈 외력 대기 (실제 로봇 모드)")
+    log("[3] 순응 제어 활성화 및 비즈 외력 대기 (시뮬레이션 모드)")
     task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
     wait(0.1)
 
-    # Z축으로 누르는 힘 설정 (비즈에 닿기 위해 아래로 밀기)
+    # Z축으로 누르는 힘 설정 (비즈에 닿기 위해)
     fd = [0, 0, -20, 0, 0, 0]
     fctrl_dir = [0, 0, 1, 0, 0, 0]
     set_desired_force(fd, dir=fctrl_dir, mod=DR_FC_MOD_REL)
     wait(0.1)
 
-    # 실제 센서를 통해 비즈 외력(저항)이 3.0N 이상 감지될 때까지 대기
+    # [수정] 시뮬레이션용 외력 가짜 생성 (3초 후 5N 발생)
     contact_threshold = 3.0
+    sim_start_time = time.time()
+    
     while True:
-        contact_fz = _safe_get_fz()
+        # 실제 로봇에서는 아래 줄 사용: 
+        # contact_fz = _safe_get_fz()
         
-        # 가짜 힘 발생 코드를 완전히 삭제하고 실제 센서값만 의존합니다.
+        # 가상환경 테스트용: 3초 대기 후 임의의 힘(5.0N) 발생
+        if time.time() - sim_start_time > 3.0:
+            contact_fz = 5.0
+        else:
+            contact_fz = 0.0
+
         if contact_fz is not None and contact_fz >= contact_threshold:
             log(f"비즈 외력 감지 성공 (fz: {contact_fz:.2f}N). 혼합을 시작합니다.")
             break

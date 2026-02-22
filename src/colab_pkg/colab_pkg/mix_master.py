@@ -1,3 +1,4 @@
+# 기능만 구현해놓은 상태
 #!/usr/bin/env python3
 import time
 import rclpy
