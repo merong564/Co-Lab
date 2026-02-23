@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Lab UI - 260220_v06</title>
+    <title>Smart Lab UI - v01</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -30,6 +30,10 @@
         .light-green { background-color: #28a745; box-shadow: 0 0 8px #28a745; }
         .joint-val { font-size: 0.85rem; background: #e9ecef; padding: 4px 8px; border-radius: 6px; display: inline-block; width: 100%; text-align: center; font-family: monospace; }
         .phase-badge { font-size: 1.2rem; padding: 10px; width: 100%; display: block; margin-bottom: 10px; }
+        .tolerance-badge { background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; vertical-align: middle; margin-left: 4px; font-weight: 800; }
+        /* 재료 입력창 스타일 */
+        .ingredient-input { border: 1px solid #ced4da; border-radius: 8px; padding: 10px; margin-bottom: 10px; background-color: #fff; }
+        .ingredient-input .form-control { border: none; background-color: #f8f9fa; text-align: center; font-weight: bold; }
     </style>
 </head>
 <body onload="initSystem()">
@@ -60,16 +64,35 @@
                         <span id="tare-status" class="badge bg-secondary">미설정</span>
                     </div>
 
-                    <label class="form-label fw-bold">재료 선택</label>
-                    <div class="row g-2 mb-3">
-                        <div class="col-6"><input type="radio" class="btn-check" name="material" id="mat_water" value="water" checked><label class="btn btn-outline-primary w-100" for="mat_water">💧 물</label></div>
-                        <div class="col-6"><input type="radio" class="btn-check" name="material" id="mat_ethanol" value="ethanol"><label class="btn btn-outline-info w-100" for="mat_ethanol">🧪 에탄올</label></div>
+                    <label class="form-label fw-bold">재료별 무게 설정 (Custom Recipe)</label>
+                    <div class="ingredient-input">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span><i class="fas fa-circle" style="color: #e83e8c;"></i> 무지개 비즈</span>
+                            <div class="input-group input-group-sm" style="width: 100px;">
+                                <input type="number" id="mat_rainbow" class="form-control" value="10" step="1" oninput="calculateTotalWeight()">
+                                <span class="input-group-text">g</span>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span><i class="fas fa-circle text-primary"></i> 푸른색 구슬</span>
+                            <div class="input-group input-group-sm" style="width: 100px;">
+                                <input type="number" id="mat_blue" class="form-control" value="10" step="1" oninput="calculateTotalWeight()">
+                                <span class="input-group-text">g</span>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span><i class="fas fa-circle text-secondary"></i> 자갈</span>
+                            <div class="input-group input-group-sm" style="width: 100px;">
+                                <input type="number" id="mat_gravel" class="form-control" value="100" step="1" oninput="calculateTotalWeight()">
+                                <span class="input-group-text">g</span>
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="row mb-3">
+                    <div class="row mb-3 mt-3">
                         <div class="col-6">
-                            <label class="form-label fw-bold">목표 용량 (g)</label>
-                            <input type="number" id="target_weight" class="form-control text-center fw-bold" value="50" step="10">
+                            <label class="form-label fw-bold">목표 무게 (g)</label>
+                            <input type="number" id="target_weight" class="form-control text-center fw-bold bg-white" value="120" readonly>
                         </div>
                         <div class="col-6">
                             <label class="form-label fw-bold">섞는 시간 (s)</label>
@@ -128,7 +151,7 @@
                             <span class="fw-bold"><span id="success_count">0</span> / <span id="total_count">0</span></span>
                         </div>
                         <div class="col-3 border-end">
-                            <small class="text-muted d-block" style="font-size:0.75rem">성공률</small>
+                            <small class="text-muted d-block" style="font-size:0.75rem">성공률 <span class="tolerance-badge">&plusmn;10%</span></small>
                             <span class="fw-bold text-success"><span id="success_rate">0</span>%</span>
                         </div>
                         <div class="col-3 border-end">
@@ -146,10 +169,10 @@
                             <thead class="table-light" style="position: sticky; top: 0; z-index: 1;">
                                 <tr>
                                     <th>회차</th>
-                                    <th>목표 무게</th>
-                                    <th>결과 무게</th>
+                                    <th>목표(재료)</th>
+                                    <th>결과(오차g)</th>
                                     <th>오차율</th>
-                                    <th>성공률</th>
+                                    <th>성공률 <span class="tolerance-badge" style="font-size: 0.55rem;">&plusmn;10%</span></th>
                                     <th>사이클 타임</th>
                                     <th>판정</th>
                                 </tr>
@@ -214,6 +237,16 @@
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
 <script>
+    // [추가] 사용자가 각 재료의 무게를 변경할 때마다 총합을 계산하여 '목표 무게' 칸에 업데이트하는 함수
+    function calculateTotalWeight() {
+        const rainbow = parseFloat(document.getElementById('mat_rainbow').value) || 0;
+        const blue = parseFloat(document.getElementById('mat_blue').value) || 0;
+        const gravel = parseFloat(document.getElementById('mat_gravel').value) || 0;
+        
+        const total = rainbow + blue + gravel;
+        document.getElementById('target_weight').value = total;
+    }
+
     const firebaseConfig = { apiKey: "AIzaSyBOVQ2tEPWe_GfIBavzqcw1ppfe2EqiRdE", authDomain: "colab1-78afc.firebaseapp.com", databaseURL: "https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app", projectId: "colab1-78afc", storageBucket: "colab1-78afc.firebasestorage.app", messagingSenderId: "312617327218", appId: "1:312617327218:web:2564e4ed07449d381dc0eb" };
     if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const database = firebase.database();
@@ -313,10 +346,13 @@
 
         document.getElementById('current_weight').innerText = weight.toFixed(1);
         document.getElementById('current_flow').innerText = flowRate.toFixed(1);
-        
+
         if (isRunning) {
+            let elapsedTime = ((currentTime - startTime) / 1000).toFixed(1);
+            document.getElementById('last_cycle_time').innerText = elapsedTime; 
+
             experimentData.push({
-                time: ((currentTime - startTime) / 1000).toFixed(1),
+                time: elapsedTime,
                 weight: weight.toFixed(2),
                 flow: flowRate
             });
@@ -353,7 +389,10 @@
         }
         
         if(stats.error_rate !== undefined) document.getElementById('error_rate').innerText = stats.error_rate;
-        if(stats.last_cycle_time !== undefined) document.getElementById('last_cycle_time').innerText = stats.last_cycle_time;
+        
+        if(stats.last_cycle_time !== undefined && !isRunning) { 
+            document.getElementById('last_cycle_time').innerText = stats.last_cycle_time;
+        }
     });
 
     database.ref('robot_status').on('value', (snapshot) => {
@@ -376,7 +415,9 @@
 
         tbody.innerHTML = ''; 
         let records = [];
-        snapshot.forEach((child) => { records.push(child.val()); });
+        snapshot.forEach((child) => {
+            records.push(child.val());
+        });
         
         for(let i = records.length - 1; i >= 0; i--) {
             const data = records[i];
@@ -385,17 +426,21 @@
             const successBadge = data.success 
                 ? '<span class="badge bg-success">성공</span>' 
                 : '<span class="badge bg-danger">실패</span>';
-            
-            // [핵심 변경] 파이썬에서 보내주는 100 or 0 의 데이터를 활용 (과거 데이터는 true/false로 판별)
-            const successRate = data.success_rate !== undefined ? data.success_rate : (data.success ? 100 : 0);
                 
+            const successRate = data.success_rate !== undefined ? data.success_rate : (data.success ? 100 : 0);
+            
+            // 데이터 매핑
+            const materialStr = data.material !== undefined ? data.material : '-';
+            const ssError = data.ss_error_g !== undefined ? data.ss_error_g : '-';
+            const cycle = data.cycle_time !== undefined ? data.cycle_time : '-';
+            
             tr.innerHTML = `
                 <td class="fw-bold">${i + 1}</td>
-                <td>${data.target_weight}g</td>
-                <td class="text-primary fw-bold">${data.final_weight}g</td>
-                <td class="${data.error_rate <= 15.0 ? 'text-success' : 'text-danger'} fw-bold">${data.error_rate}%</td>
+                <td>${data.target_weight}g<br><small class="text-muted">${materialStr}</small></td>
+                <td class="text-primary fw-bold">${data.final_weight}g<br><small class="text-danger">(±${ssError}g)</small></td>
+                <td class="${data.error_rate <= 10.0 ? 'text-success' : 'text-danger'} fw-bold">${data.error_rate}%</td>
                 <td class="${successRate === 100 ? 'text-success' : 'text-danger'} fw-bold">${successRate}%</td>
-                <td>${data.cycle_time}s</td>
+                <td>${cycle}s</td>
                 <td>${successBadge}</td>
             `;
             tbody.appendChild(tr);
@@ -443,11 +488,17 @@
 
     function startExperiment() {
         if (!isTareSet) { alert("⚠️ 영점 조절을 먼저 해주세요!"); return; }
+        
+        // [수정] 사용자가 입력한 비즈 값들을 가져와 동적으로 material 문자열 생성
+        const rainbow = document.getElementById('mat_rainbow').value;
+        const blue = document.getElementById('mat_blue').value;
+        const gravel = document.getElementById('mat_gravel').value;
         const target = document.getElementById('target_weight').value;
         const mixing = document.getElementById('mixing_duration').value;
-        const material = document.querySelector('input[name="material"]:checked').value;
         
-        if(confirm(`[${material}] 작업 시작?\n목표: ${target}g / 혼합: ${mixing}초`)) {
+        const customMaterial = `Custom Recipe (무지개${rainbow}/푸른색${blue}/자갈${gravel})`;
+        
+        if(confirm(`[${customMaterial}]\n작업 시작?\n목표: ${target}g / 혼합: ${mixing}초`)) {
             resetData();
             
             isRunning = true;
@@ -458,7 +509,7 @@
                 type: "start_pouring", 
                 target_weight: target, 
                 mixing_duration: mixing,
-                material: material, 
+                material: customMaterial, // [수정] 생성된 문자열 전송
                 timestamp: Date.now() 
             });
             addLog(`🚀 Start: ${target}g, Mix ${mixing}s`);
@@ -485,6 +536,7 @@
         combinedChart.update(); 
         document.getElementById('current_weight').innerText = "0.0"; 
         document.getElementById('current_flow').innerText = "0.0"; 
+        document.getElementById('last_cycle_time').innerText = "0.0"; 
     }
     
     function addLog(msg) {
@@ -494,7 +546,7 @@
             box.innerHTML = `[${time}] ${msg}<br>` + box.innerHTML;
         }
     }
-
+    
     function exportToCSV() {
         if (experimentData.length === 0) { alert("저장할 데이터가 없습니다."); return; }
         let csvContent = "data:text/csv;charset=utf-8,Time(s),Weight(g),Flow(g/s)\r\n";
@@ -502,7 +554,7 @@
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
         link.setAttribute("href", encodedUri);
-        link.setAttribute("download", `experiment_260220_v06.csv`);
+        link.setAttribute("download", `experiment_260220_v01.csv`);
         document.body.appendChild(link);
         link.click();
     }
