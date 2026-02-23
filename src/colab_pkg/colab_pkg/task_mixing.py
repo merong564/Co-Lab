@@ -50,7 +50,7 @@ class TaskMixing(Node):
         self.pos_mixer_pick        = [87.752, 443.877, 236.217, 114.003, 179.135, 113.295]
         self.pos_mixer_pick_safe   = [87.752, 190.136, 236.217, 114.003, 179.135, 113.295]
         self.pos_mixer_mix_safe    = [349.592, 93.050, 233.490, 123.441, 179.314, 122.717]
-        self.pos_mixer_mix_down    = [349.592, 93.050, 155.172, 123.441, 179.314, 122.717]
+        self.pos_mixer_mix_down    = [349.592, 93.050, 135.172, 123.441, 179.314, 122.717]
 
         self.get_logger().info("TaskMixing Ready. Service: execute_mixing")
 
@@ -320,6 +320,9 @@ class TaskMixing(Node):
 
         pick_and_ready_mixer()
         wait(0.2)
+
+        # 잡은 상태에서 시작하고 싶은 경우
+        # movel(posx(self.pos_mixer_mix_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
 
         log("[3] 순응 제어 기반 혼합 시작")
         mixer_descend_and_mix_oscillate(
