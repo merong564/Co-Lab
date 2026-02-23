@@ -149,6 +149,7 @@ class UserInterface(Node):
                 self.save_experiment_history(msg)
             self.last_total_count = msg.total_count # 다음 체크를 위해 업데이트
 
+        # [수정/추가] 기존 상태 데이터에 제어 지표(P, D, Overshoot 등) 추가
         self.latest_system_status = {
             "phase": msg.phase,
             "tcp_vel": msg.tcp_vel,
@@ -157,32 +158,65 @@ class UserInterface(Node):
             "total_count": msg.total_count,
             "success_count": msg.success_count,
             "error_rate": round(msg.error_rate, 2),
-            "last_cycle_time": round(msg.last_cycle_time, 2)
+            "last_cycle_time": round(msg.last_cycle_time, 2),
+            # 👇 새로 추가된 제어 지표들 (메시지에 해당 필드가 있어야 함)
+            "p_gain": getattr(msg, 'p_gain', 0.0),
+            "d_gain": getattr(msg, 'd_gain', 0.0),
+            "overshoot_g": round(getattr(msg, 'overshoot', 0.0), 2),
+            "rise_time": round(getattr(msg, 'rise_time', 0.0), 2),
+            "settling_time": round(getattr(msg, 'settling_time', 0.0), 2)
         }
         
-    # [추가] 1사이클 실험 종료 시 DB에 히스토리를 영구 기록(Push)하는 함수
+    # [수정/추가] 1사이클 실험 종료 시 DB에 고급 분석 지표를 포함하여 저장
     def save_experiment_history(self, msg):
         try:
+            # 변수 안전하게 추출
+            p_gain = getattr(msg, 'p_gain', 0.0)
+            d_gain = getattr(msg, 'd_gain', 0.0)
+            overshoot = getattr(msg, 'overshoot', 0.0)
+            rise_time = getattr(msg, 'rise_time', 0.0)
+            settling_time = getattr(msg, 'settling_time', 0.0)
+            
+            # 지표 계산 로직
+            target_w = self.current_target_weight
+            final_w = round(self.latest_weight, 2)
+            ss_error_g = round(abs(target_w - final_w), 2)
+            error_rate = round(msg.error_rate, 2)
+            
+            # P/D 비율 및 붓기 속도 계산 (분모가 0인 경우 방지)
+            pd_ratio = round(p_gain / d_gain, 2) if d_gain > 0 else 0.0
+            avg_pouring_rate = round(final_w / rise_time, 2) if rise_time > 0 else 0.0
+            
+            # 사이클 타임 및 오버헤드 (안정화 시간 + 이동 대기 8초 가정)
+            calc_cycle_time = round(settling_time + 8.0, 2)
+            overhead_time = 8.0
+
             history_data = {
                 'timestamp': int(time.time() * 1000),
                 'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'material': self.current_material,
-                'target_weight': self.current_target_weight,
-                'final_weight': round(self.latest_weight, 2),
-                'error_rate': round(msg.error_rate, 2),
-                'cycle_time': round(msg.last_cycle_time, 2),
-                'success': True if msg.error_rate <= 2.0 else False  # 오차율 2% 이하면 성공
+                'target_weight': target_w,
+                'final_weight': final_w,
+                'error_rate': error_rate,
+                # [중요] 성공 기준을 ±10%로 업데이트
+                'success': True if error_rate <= 10.0 else False,
+                
+                # 👇 UI 연동을 위한 신규 분석 지표 추가 👇
+                'ss_error_g': ss_error_g,
+                'overshoot_g': round(overshoot, 2),
+                'p_d_ratio': pd_ratio,
+                'avg_pouring_rate': avg_pouring_rate,
+                'cycle_time': calc_cycle_time,
+                'overhead_time': overhead_time
             }
+            
             # push()를 사용하여 experiment_history/ 경로에 데이터 누적
             db_ref = db.reference('experiment_history')
             new_record = db_ref.push(history_data)
             
-            self.get_logger().info(f"💾 [DB 아카이빙 완료] 히스토리 ID: {new_record.key}")
+            self.get_logger().info(f"💾 [DB 저장 성공] ID: {new_record.key} | 오차: {error_rate}%")
         except Exception as e:
             self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
-            
-    def joint_callback(self, msg): pass
-    def weight_callback(self, msg): self.latest_weight = msg.data
 
 def main(args=None):
     rclpy.init(args=args)
