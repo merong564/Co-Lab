@@ -4,8 +4,7 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260217_v02 (Service Client Implemented)
-[Description] Firebase 명령을 받아 /start_process 서비스를 호출하는 브릿지
+[Version] 260223_v01 (Simplified End-to-End Testing)
 """
 
 import rclpy
@@ -13,75 +12,54 @@ from rclpy.node import Node
 import firebase_admin
 from firebase_admin import credentials, db
 import time
-import os  # [추가] 환경 변수 사용
-from dotenv import load_dotenv # [추가] .env 로드
-from rclpy.executors import MultiThreadedExecutor # [추가] 멀티스레드 실행기 임포트
-from rclpy.callback_groups import ReentrantCallbackGroup # [추가] 콜백 그룹 임포트
+import datetime
+import re  
 
-ROBOT_ID = "dsr01"
-
-# .env 파일 로드
-env_path = os.path.expanduser('~/Co-Lab/.env')
-load_dotenv(dotenv_path=env_path)
-
-# 메시지 및 서비스 타입 임포트
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32, String
 
 try:
-    # [변경] UiInput 대신 RobotCommand 서비스 임포트
     from colab_interfaces.srv import RobotCommand
     from colab_interfaces.msg import SystemStatus
     IMPORT_SUCCESS = True
 except ImportError:
     print("❌ [Error] colab_interfaces 패키지를 찾을 수 없습니다. source install/setup.bash를 확인하세요.")
     IMPORT_SUCCESS = False
+    
+ROBOT_ID = "dsr01"
 
 class UserInterface(Node):
     def __init__(self):
         super().__init__('user_interface', namespace=ROBOT_ID)
         
-        # 1. Firebase 초기화
         try:
-            cred_path = os.getenv('FIREBASE_CRED_PATH')
-            db_url = os.getenv('FIREBASE_DB_URL')
-
-            if not cred_path or not db_url:
-                raise ValueError(".env 파일에서 설정을 찾을 수 없습니다.")
-
+            cred = credentials.Certificate("/home/rokey/Co-Lab/serviceAccountKey.json")
             if not firebase_admin._apps:
-                cred = credentials.Certificate(cred_path)
                 firebase_admin.initialize_app(cred, {
-                    'databaseURL': db_url
+                    'databaseURL': 'https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app'
                 })
             self.get_logger().info("🔥 Firebase Connected!")
-            db.reference('commands').set({}) # 초기화
+            db.reference('commands').set({}) 
         except Exception as e:
             self.get_logger().error(f"Firebase Error: {e}")
 
         if IMPORT_SUCCESS:
-            # 2. [핵심 변경] Service Client 생성 (/start_process)
-            # 역할: 로봇에게 작업을 시작하라고 '요청'하는 클라이언트
             self.cli = self.create_client(RobotCommand, 'start_process')
-            
-            # 3. 긴급 정지 Publisher (/stop)
-            # 역할: 다이어그램에 나온 대로 긴급 정지는 Topic으로 발행
             self.stop_pub = self.create_publisher(String, 'stop', 10)
-
-            self.cb_group_sensor = ReentrantCallbackGroup()
             
-            # 4. Subscribers (Robot -> UI)
-            self.create_subscription(JointState, 'joint_states', self.joint_callback, 10, callback_group=self.cb_group_sensor)
-            self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10, callback_group=self.cb_group_sensor)
-            self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10, callback_group=self.cb_group_sensor)
+            self.create_subscription(JointState, 'dsr01/joint_states', self.joint_callback, 10)
+            self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10)
+            self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10)
         
-        self.cb_group_timer = ReentrantCallbackGroup()
-        # 5. Timer & Variables
-        self.timer = self.create_timer(0.1, self.loop_callback, callback_group=self.cb_group_timer)
+        self.timer = self.create_timer(0.1, self.loop_callback)
         self.last_command_timestamp = time.time() * 1000 
         
         self.latest_weight = 0.0
         self.latest_system_status = {}
+        
+        self.current_target_weight = 0.0
+        self.current_material = "Unknown"
+        self.last_total_count = 0 
 
     def loop_callback(self):
         self.check_firebase_commands()
@@ -97,8 +75,9 @@ class UserInterface(Node):
                     self.last_command_timestamp = cmd_data['timestamp']
                     cmd_type = cmd_data.get('type', '')
 
-                    # [핵심 로직] start_pouring 명령이 오면 -> 서비스 호출 (Call Service)
                     if cmd_type == 'start_pouring':
+                        self.current_target_weight = float(cmd_data.get('target_weight', 0.0))
+                        self.current_material = cmd_data.get('material', 'Unknown')
                         self.call_service_start_process(cmd_data)
                     
                     elif cmd_type == 'emergency_stop':
@@ -112,26 +91,35 @@ class UserInterface(Node):
             self.get_logger().error(f"Command Check Error: {e}")
 
     def call_service_start_process(self, cmd_data):
-        """ /start_process 서비스 호출 함수 """
-        # 서비스 서버(로봇 제어 노드)가 켜져 있는지 1초만 기다려봄
         if not self.cli.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('⚠️ 서비스(/start_process) 연결 실패. 로봇 제어 노드가 켜져 있나요?')
             return
 
-        # 요청 데이터 채우기 (RobotCommand.srv 정의에 따름)
         req = RobotCommand.Request()
-        req.mode = "FULL"  # 기본 모드
-        req.target_weight = float(cmd_data.get('target_weight', 0.0))
+        req.mode = "FULL"
+        
+        # [수정] 시작: 웹에서 넘겨준 재료 문자열에서 숫자를 추출해 리스트로 묶기
+        match = re.search(r'무지개(\d+(\.\d+)?)/푸른색(\d+(\.\d+)?)/자갈(\d+(\.\d+)?)', self.current_material)
+        if match:
+            # [수정] 매칭 성공 시 무조건 LARGE가 먼저 오도록 (LARGE, SMALL1, SMALL2) 순서로 배열 생성
+            # match.group(5) = 자갈, match.group(1) = 무지개, match.group(3) = 푸른색
+            req.targets = ["LARGE", "SMALL1", "SMALL2"]
+            req.target_weights = [float(match.group(5)), float(match.group(1)), float(match.group(3))]
+        else:
+            # 형식이 맞지 않을 경우의 방어 코드
+            req.targets = ["LARGE"]
+            req.target_weights = [float(cmd_data.get('target_weight', 0.0))]
+        # [수정] 끝
+        
         req.mixing_duration = float(cmd_data.get('mixing_duration', 0.0))
 
-        self.get_logger().info(f"📤 서비스 요청 보냄: Target={req.target_weight}g, Mix={req.mixing_duration}s")
+        # [수정] 로그 출력 문구를 리스트 형태에 맞게 변경
+        self.get_logger().info(f"📤 서비스 요청 보냄: Targets={req.targets}, Weights={req.target_weights}g, Mix={req.mixing_duration}s")
         
-        # 비동기 호출 (결과를 기다리지 않고 바로 넘어감)
         self.future = self.cli.call_async(req)
         self.future.add_done_callback(self.service_response_callback)
 
     def service_response_callback(self, future):
-        """ 서비스 응답이 오면 실행되는 함수 """
         try:
             response = future.result()
             if response.success:
@@ -150,23 +138,20 @@ class UserInterface(Node):
             if self.latest_system_status:
                 updates['system_stats'] = self.latest_system_status
                 
-                # [호환성] 기존 로봇 상태 경로에도 일부 데이터 업데이트
                 updates['robot_status/phase'] = self.latest_system_status.get('phase', 'Ready')
                 updates['robot_status/velocity'] = self.latest_system_status.get('tcp_vel', 0)
                 updates['robot_status/acceleration'] = self.latest_system_status.get('tcp_acc', 0)
             
             db.reference().update(updates)
-
-            # 업로드 소요 시간 계산
-            if hasattr(self, 'latest_weight_rcv_time'):
-                delay = time.time() - self.latest_weight_rcv_time
-                self.get_logger().info(f"데이터 지연 시간: {delay:.3f} 초")
-
-
-        except Exception as e:
-            self.get_logger().error(f"Firebase Upload Error: {e}") # [추가] 에러 원인 파악을 위한 로그
+        except Exception:
+            pass
 
     def system_status_callback(self, msg):
+        if hasattr(self, 'last_total_count') and msg.total_count > self.last_total_count:
+            if self.last_total_count != 0: 
+                self.save_experiment_history(msg)
+            self.last_total_count = msg.total_count
+
         self.latest_system_status = {
             "phase": msg.phase,
             "tcp_vel": msg.tcp_vel,
@@ -178,21 +163,44 @@ class UserInterface(Node):
             "last_cycle_time": round(msg.last_cycle_time, 2)
         }
         
-    def joint_callback(self, msg): pass
+    def save_experiment_history(self, msg):
+        try:
+            target_w = self.current_target_weight
+            final_w = round(self.latest_weight, 2)
+            
+            ss_error_g = round(abs(target_w - final_w), 2)
+            error_rate = round(msg.error_rate, 2)
 
+            history_data = {
+                'timestamp': int(time.time() * 1000),
+                'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'material': self.current_material,
+                'target_weight': target_w,
+                'final_weight': final_w,
+                'error_rate': error_rate,
+                'success': True if error_rate <= 10.0 else False,
+                'ss_error_g': ss_error_g,
+                'cycle_time': round(msg.last_cycle_time, 2)
+            }
+            
+            db_ref = db.reference('experiment_history')
+            new_record = db_ref.push(history_data)
+            
+            self.get_logger().info(f"💾 [DB 저장 성공] ID: {new_record.key} | 오차: {error_rate}%")
+        except Exception as e:
+            self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
+
+    def joint_callback(self, msg): 
+        pass
+        
     def weight_callback(self, msg): 
         self.latest_weight = msg.data
-        self.latest_weight_rcv_time = time.time() # 수신 시간 기록
 
 def main(args=None):
     rclpy.init(args=args)
     node = UserInterface()
-
-    executor = MultiThreadedExecutor() # [추가] 멀티스레드 실행기 인스턴스 생성
-    executor.add_node(node) # [추가] 실행기에 노드 추가
-    
     try:
-        executor.spin()
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
