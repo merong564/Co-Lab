@@ -47,7 +47,6 @@ class TaskMixing(Node):
         self.pos_mixer_pick        = [87.752, 443.877, 236.217, 114.003, 179.135, 113.295]
         self.pos_mixer_pick_safe   = [87.752, 190.136, 236.217, 114.003, 179.135, 113.295]
         self.pos_mixer_mix_safe    = [349.592, 93.050, 233.490, 123.441, 179.314, 122.717]
-        # [수정] 첫 번째 코드의 좌표값(Z: 155.172) 반영
         self.pos_mixer_mix_down    = [349.592, 93.050, 155.172, 123.441, 179.314, 122.717]
 
         self.get_logger().info("TaskMixing Ready. Service: execute_mixing")
@@ -132,36 +131,38 @@ class TaskMixing(Node):
             movel(posx(self.pos_mixer_pick_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             log("믹서 원위치 반환 완료")
 
-        # ✅ [추가] 혼합 후, 원위치 가기 전 Z로 7cm 올린 뒤 탁탁 털기 (movel 기반)
-        def shake_off_before_return(lift_mm=70.0, tap_mm=15.0, tap_count=4, vel=120, acc=120):
-            """
-            혼합 후 믹서 원위치 가기 전에:
-            1) 현재 위치에서 Z + 70mm 올림
-            2) Z축으로 '탁탁' (위/아래) movel 반복
-            """
-            log("[3-1] 믹서 털기(탁탁) 시작")
+        # ✅ [수정] 위로(올릴 때)는 천천히 / 아래로(털려고 내릴 때)는 빠르게
+        def shake_off_before_return(
+            lift_mm=70.0,
+            tap_mm=25.0,
+            tap_count=12,
+            up_vel=60, up_acc=60,        # 위로 갈 때(천천히)
+            down_vel=350, down_acc=500,  # 아래로 갈 때(빠르게)
+            ref=DR_BASE
+        ):
+            log("[3-1] 믹서 털기(위=천천히/아래=빠르게) 시작")
 
-            ret = get_current_posx(ref=DR_BASE)
+            ret = get_current_posx(ref=ref)
             cur = ret[0] if isinstance(ret, tuple) else ret  # [x,y,z,rx,ry,rz]
             x, y, z, rx, ry, rz = map(float, cur)
 
-            # 1) Z + 70mm 올림
+            # 1) 털기 기준 높이로 천천히 들어올리기
             up = posx(x, y, z + lift_mm, rx, ry, rz)
-            movel(up, vel=vel, acc=acc, ref=DR_BASE)
-            wait(0.1)
+            movel(up, vel=up_vel, acc=up_acc, ref=ref)
+            wait(0.05)
 
-            # 2) 탁탁 (아래로 툭 내렸다가 다시 올리기)
             base_z = z + lift_mm
+            down = posx(x, y, base_z - tap_mm, rx, ry, rz)
+
+            # 2) 탁탁 반복: 내려갈 때 빠르게(탁), 올라갈 때 천천히(복귀)
             for _ in range(int(tap_count)):
-                down = posx(x, y, base_z - tap_mm, rx, ry, rz)
-                movel(down, vel=vel, acc=acc, ref=DR_BASE)
-                wait(0.05)
-                movel(up, vel=vel, acc=acc, ref=DR_BASE)
-                wait(0.10)
+                movel(down, vel=down_vel, acc=down_acc, ref=ref)
+                wait(0.01)
+                movel(up, vel=up_vel, acc=up_acc, ref=ref)
+                wait(0.01)
 
-            log("[3-1] 믹서 털기(탁탁) 완료")
+            log("[3-1] 믹서 털기 완료")
 
-        # [수정] 첫 번째 코드의 로직(amovel, 주석 처리된 movel 등) 그대로 적용
         def mixer_descend_and_wiggle(end_pos_list, fz_trigger=7.0, down_force=-10.0):
             def _get_fz():
                 ret = get_tool_force(DR_TOOL)
@@ -181,7 +182,6 @@ class TaskMixing(Node):
             wait(0.1)
 
             log("1. 힘 감지 모드로 하강 시작 (외력 대기)")
-
             amovel(posx(end_pos_list), vel=10, acc=10, ref=DR_BASE)
 
             while True:
@@ -202,11 +202,9 @@ class TaskMixing(Node):
                     log(f"[도달] 목표 높이 도달 (현재 Z: {curr_z:.2f})")
                     break
 
-                # [추가] 2mm씩 Z축 하강 (주석 유지)
                 # curr_pos[2] -= 2.0
                 # if curr_pos[2] < target_z:
                 #     curr_pos[2] = target_z
-
                 # movel(posx(curr_pos), vel=10, acc=10, ref=DR_BASE)
 
                 move_periodic(
@@ -218,7 +216,6 @@ class TaskMixing(Node):
                 )
 
             log(f"3. 목표 도달 후 추가 혼합 ({mixing_duration}초)")
-            # [수정] 혼합 시간에 따른 반복 횟수 동적 계산 적용 (period 2.0 기준)
             repeat_calc = max(1, int(mixing_duration / 2.0))
             move_periodic(
                 amp=[0, 0, -5, 0, 0, 15],
@@ -247,8 +244,14 @@ class TaskMixing(Node):
             down_force=-10.0
         )
 
-        # ✅ [추가] 원위치(return_mixer) 가기 전에 7cm 올리고 탁탁 털기
-        shake_off_before_return(lift_mm=70.0, tap_mm=15.0, tap_count=4, vel=L_VEL, acc=L_ACC)
+        # ✅ 위로는 천천히 / 아래로는 빠르게 (탁탁)
+        shake_off_before_return(
+            lift_mm=70.0,
+            tap_mm=25.0,
+            tap_count=12,
+            up_vel=60, up_acc=60,
+            down_vel=350, down_acc=500
+        )
 
         return_mixer()
 
