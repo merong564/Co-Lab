@@ -251,6 +251,10 @@
     if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const database = firebase.database();
 
+    // [추가] UI 가상 누적을 위한 변수 선언
+    let accumulatedOffset = 0; 
+    let lastRawWeight = 0;     
+
     let isRunning = false;
     let startTime = 0;
     let lastWeight = 0, lastTime = 0;
@@ -327,6 +331,7 @@
         }
     }
 
+    // [수정] 영점(Tare) 드랍을 감지하고 무게를 가상으로 누적하는 로직으로 교체
     database.ref('sensor_data').on('value', (snapshot) => {
         const d = snapshot.val();
         if(!d) return;
@@ -335,16 +340,30 @@
         lastUpdateTimestamp = Date.now();
         updateConnectionStatus('online', 'Autonomous');
 
-        const weight = parseFloat(d.weight || 0);
+        // 로드셀에서 올라오는 날것(Raw)의 무게
+        const rawWeight = parseFloat(d.weight || 0);
+
+        // [추가] 영점(Tare) 감지 알고리즘!
+        // 방금 전 무게보다 현재 무게가 5g 이상 갑자기 떨어졌다면, 타 노드에서 영점을 잡은 것으로 판단
+        if (lastRawWeight - rawWeight > 5.0) {
+            accumulatedOffset += lastRawWeight; // 떨어지기 직전의 무게를 오프셋에 더해줌
+            addLog(`🔄 [UI 보정] 영점 조절 감지됨. 이전 무게(${lastRawWeight.toFixed(1)}g) 누적 완료.`);
+        }
+        lastRawWeight = rawWeight;
+
+        // 화면과 그래프에 보여줄 진짜 누적 무게
+        const displayWeight = rawWeight + accumulatedOffset;
         const currentTime = Date.now();
         
         let flowRate = 0;
         if (lastTime > 0) {
             const dt = (currentTime - lastTime) / 1000;
-            if (dt > 0) flowRate = Math.max(0, (weight - lastWeight) / dt);
+            // 유량 계산도 가상 누적 무게를 기준으로 변경
+            if (dt > 0) flowRate = Math.max(0, (displayWeight - lastWeight) / dt);
         }
 
-        document.getElementById('current_weight').innerText = weight.toFixed(1);
+        // [수정] weight 대신 displayWeight로 텍스트 업데이트
+        document.getElementById('current_weight').innerText = displayWeight.toFixed(1);
         document.getElementById('current_flow').innerText = flowRate.toFixed(1);
 
         if (isRunning) {
@@ -353,7 +372,7 @@
 
             experimentData.push({
                 time: elapsedTime,
-                weight: weight.toFixed(2),
+                weight: displayWeight.toFixed(2), // [수정] 누적 무게 저장
                 flow: flowRate
             });
         }
@@ -363,11 +382,11 @@
             combinedChart.data.datasets.forEach((dataset) => dataset.data.shift());
         }
         combinedChart.data.labels.push(new Date().toLocaleTimeString());
-        combinedChart.data.datasets[0].data.push(weight);
+        combinedChart.data.datasets[0].data.push(displayWeight); // [수정] 차트에 누적 무게 그리기
         combinedChart.data.datasets[1].data.push(flowRate);
         combinedChart.update('none');
 
-        lastWeight = weight;
+        lastWeight = displayWeight; // [수정]
         lastTime = currentTime;
     });
 
@@ -429,7 +448,6 @@
                 
             const successRate = data.success_rate !== undefined ? data.success_rate : (data.success ? 100 : 0);
             
-            // 데이터 매핑
             const materialStr = data.material !== undefined ? data.material : '-';
             const ssError = data.ss_error_g !== undefined ? data.ss_error_g : '-';
             const cycle = data.cycle_time !== undefined ? data.cycle_time : '-';
@@ -447,11 +465,9 @@
         }
     });
 
-    // [수정] 대소문자 상관없이(예: "pouring", "POURING") 완벽히 인식하도록 안전 장치 추가
     function updatePhaseDisplay(rawPhase) {
         if (!rawPhase) return;
         
-        // 첫 글자 대문자, 나머지 소문자로 통일 (예: "mixing" -> "Mixing")
         const newPhase = rawPhase.trim().charAt(0).toUpperCase() + rawPhase.trim().slice(1).toLowerCase();
 
         if(currentPhase !== newPhase) {
@@ -495,7 +511,6 @@
     function startExperiment() {
         if (!isTareSet) { alert("⚠️ 영점 조절을 먼저 해주세요!"); return; }
         
-        // [수정] 사용자가 입력한 비즈 값들을 가져와 동적으로 material 문자열 생성
         const rainbow = document.getElementById('mat_rainbow').value;
         const blue = document.getElementById('mat_blue').value;
         const gravel = document.getElementById('mat_gravel').value;
@@ -507,6 +522,10 @@
         if(confirm(`[${customMaterial}]\n작업 시작?\n목표: ${target}g / 혼합: ${mixing}초`)) {
             resetData();
             
+            // [추가] 새 실험 시작 시 가상 누적값 초기화
+            accumulatedOffset = 0; 
+            lastRawWeight = 0;
+
             isRunning = true;
             startTime = Date.now();
             experimentData = []; 
@@ -515,7 +534,7 @@
                 type: "start_pouring", 
                 target_weight: target, 
                 mixing_duration: mixing,
-                material: customMaterial, // [수정] 생성된 문자열 전송
+                material: customMaterial, 
                 timestamp: Date.now() 
             });
             addLog(`🚀 Start: ${target}g, Mix ${mixing}s`);
@@ -529,6 +548,11 @@
     
     function sendTare() { 
         resetData(); 
+        
+        // [추가] 수동 영점 조절 시 가상 누적치 완전 초기화
+        accumulatedOffset = 0; 
+        lastRawWeight = 0;
+
         database.ref('commands').set({ type: "tare", timestamp: Date.now() }); 
         isTareSet = true; 
         document.getElementById('tare-status').innerText = "설정 완료"; 
