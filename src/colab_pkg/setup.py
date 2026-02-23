@@ -44,7 +44,8 @@ setup(
             'transfer = colab_pkg.task_transfer:main',
             'mixing = colab_pkg.task_mixing:main',            
             'gripper_test = colab_pkg.gripper_test:main',
-            
+            'safety_monitor = colab_pkg.safety_monitor:main',
+     	    'task_recovery  = colab_pkg.task_recovery:main',
         ],
     },
 )
