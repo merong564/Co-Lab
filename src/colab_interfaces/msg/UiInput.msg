@@ -1,2 +1,0 @@
-bool is_confirmed
-float64 target_weight

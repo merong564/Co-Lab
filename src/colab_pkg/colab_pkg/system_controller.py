@@ -101,6 +101,11 @@ class SystemController(Node):
             if self.check_stop(): raise Exception("Process Aborted by User")
             if not await self.call_service(self.cli_mixing, mode="MIX", mixing_duration=request.mixing_duration):
                 raise Exception("Mixing Failed")
+            
+            # 6. TaskTransfer: Final Return (비커 반환)
+            if self.check_stop(): raise Exception("Process Aborted by User")
+            if not await self.call_service(self.cli_transfer, mode="RETURN", targets=["BEAKER"]):
+                raise Exception("Final Return Failed for BEAKER")
 
             response.success = True
             response.message = "All tasks completed successfully."

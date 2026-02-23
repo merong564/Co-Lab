@@ -44,8 +44,8 @@ STOP_REQUESTED = False
 
 TUBE_TUNING = {
     "LARGE": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 1.0, "STOP_THRESHOLD": 12.0},
-    "SMALL1": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 1.0},
-    "SMALL2": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 2.0}
+    "SMALL1": {"P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 1.5},
+    "SMALL2": {"P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 1.5}
 
 }
 
@@ -211,17 +211,6 @@ def initialize_robot():
     except Exception as e:
         print(f" [Thread] Init Failed: {e}")
 
-# # [수정] 동적 튜닝 파라미터를 인자로 받도록 수정
-# def calculate_tilt_angle(current_w: float, target_w: float, p_gain: float, max_tilt_step: float):
-#     error = target_w - current_w
-#     delta_angle = error * p_gain # [수정]
-
-#     if delta_angle > max_tilt_step: # [수정]
-#         delta_angle = max_tilt_step
-#     elif delta_angle < -max_tilt_step: # [수정]
-#         delta_angle = -max_tilt_step
-
-#     return float(delta_angle), float(error)
 
 def calculate_tilt_angle_pd(current_w: float, target_w: float, p_gain: float, d_gain: float, max_tilt_step: float): # [추가] 순수 PD 제어기
     global prev_error
@@ -292,7 +281,7 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         # [추가] 작은 시험관일 경우 초기 80도 급속 틸팅 수행
         if tube_type in ["SMALL1", "SMALL2"]:
             print(f"[SYSTEM] Initial 80 deg fast tilt for {tube_type}") # [추가] 상태 출력
-            init_tilt_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, 80.0) # [추가] 툴 Z축 기준 80도 회전
+            init_tilt_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, 85.0) # [추가] 툴 Z축 기준 80도 회전
             movel(init_tilt_pos, vel=60, acc=80, ref=1, mod=1) # [추가] 툴 좌표계 기준 상대 이동
             wait(0.5) # [추가] 안정화 대기
 
