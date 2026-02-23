@@ -31,9 +31,18 @@ FINGER_TCP_OFFSET = [-32.0, 0.0, 228.0, 0.0, 0.0, 0.0] # [추가] 비커 쪽 집
 
 VELOCITY = 40
 ACC = 60
+
+# 기본 튜닝 상수 (참조용으로 유지)
 P_GAIN = 0.01
 MAX_TILT_STEP = 1.0
 STOP_THRESHOLD = 20.0
+
+# [추가] 시험관 종류별 튜닝 파라미터 딕셔너리
+TUBE_TUNING = {
+    "LARGE": {"P_GAIN": 0.01, "MAX_TILT_STEP": 1.0, "STOP_THRESHOLD": 20.0},
+    "SMALL1": {"P_GAIN": 0.005, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 5.0},
+    "SMALL2": {"P_GAIN": 0.005, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 5.0}
+}
 
 # STOP 신호 플래그 (STOP 토픽 받으면 True)
 STOP_REQUESTED = False
@@ -41,7 +50,8 @@ STOP_REQUESTED = False
 # ==========================================
 # [추가] 정량 지표 계산 함수
 # ==========================================
-def calc_metrics(log_t, log_w, target_w, final_w):
+# [수정] 동적으로 적용된 튜닝값을 로깅하기 위해 파라미터 추가
+def calc_metrics(log_t, log_w, target_w, final_w, p_gain, max_tilt_step, stop_thresh):
     if not log_w:
         return
     
@@ -81,7 +91,8 @@ def calc_metrics(log_t, log_w, target_w, final_w):
             writer.writerow(["Timestamp", "Target_W", "Final_W", "P_GAIN", "MAX_TILT_STEP", "STOP_THRESHOLD", "Overshoot", "Rise_Time", "Settling_Time", "SS_Error"]) # [추가]
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # [추가]
-        writer.writerow([timestamp, target_w, final_w, P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD, round(overshoot, 2), round(rise_t, 2), round(set_t, 2), round(ss_err, 2)]) # [추가]
+        # [수정] 동적 파라미터 적용
+        writer.writerow([timestamp, target_w, final_w, p_gain, max_tilt_step, stop_thresh, round(overshoot, 2), round(rise_t, 2), round(set_t, 2), round(ss_err, 2)]) # [추가]
 
 # ==========================================
 # 2. 통신 전담 노드 (서비스 & 토픽)
@@ -125,12 +136,16 @@ class TaskPouring(Node):
             return
 
         STOP_REQUESTED = True
-        self.get_logger().warn("🚨 STOP received -> will return to ready pose then finish")
+        self.get_logger().warn("[WARN] STOP received -> will return to ready pose then finish")
 
     def execute_pouring_callback(self, request, response):
-        self.get_logger().info(f"[Service] Request Received. Target: {request.target_weight}g")
+        # [수정] 배열 형태로 전달된 targets 및 target_weights에서 값 추출
+        target_w = request.target_weights[0] if request.target_weights else 0.0
+        tube_type = request.targets[0].strip().upper() if request.targets else "LARGE" # [추가] 시험관 종류 추출
+        
+        self.get_logger().info(f"[Service] Request Received. Tube: {tube_type}, Target: {target_w}g")
 
-        success = perform_task(self, float(request.target_weight))
+        success = perform_task(self, float(target_w), tube_type) # [수정] 시험관 종류 파라미터 추가 전달
 
         response.success = bool(success)
         response.message = "Pouring Completed" if success else "Pouring Failed"
@@ -164,18 +179,20 @@ def initialize_robot():
     except Exception as e:
         print(f" [Thread] Init Failed: {e}")
 
-def calculate_tilt_angle(current_w: float, target_w: float):
+# [수정] 동적 튜닝 파라미터를 인자로 받도록 수정
+def calculate_tilt_angle(current_w: float, target_w: float, p_gain: float, max_tilt_step: float):
     error = target_w - current_w
-    delta_angle = error * P_GAIN
+    delta_angle = error * p_gain # [수정]
 
-    if delta_angle > MAX_TILT_STEP:
-        delta_angle = MAX_TILT_STEP
-    elif delta_angle < -MAX_TILT_STEP:
-        delta_angle = -MAX_TILT_STEP
+    if delta_angle > max_tilt_step: # [수정]
+        delta_angle = max_tilt_step
+    elif delta_angle < -max_tilt_step: # [수정]
+        delta_angle = -max_tilt_step
 
     return float(delta_angle), float(error)
 
-def perform_task(node: TaskPouring, target_weight: float) -> bool:
+# [수정] tube_type 파라미터 추가
+def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARGE") -> bool:
     from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait
     from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
     
@@ -186,7 +203,13 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
 
     global STOP_REQUESTED
 
-    print(f"[SYSTEM] Task Start! Target: {target_weight}g")
+    # [추가] 타겟 종류에 맞는 튜닝 파라미터 설정
+    tuning = TUBE_TUNING.get(tube_type, TUBE_TUNING["LARGE"])
+    active_p_gain = tuning["P_GAIN"]
+    active_max_tilt_step = tuning["MAX_TILT_STEP"]
+    active_stop_thresh = tuning["STOP_THRESHOLD"]
+
+    print(f"[SYSTEM] Task Start! Target: {target_weight}g | Tube: {tube_type} | Threshold: {active_stop_thresh}g")
 
     start_t = time.time() # [추가] 시작 시간 기록
     log_t = [] # [추가] 경과 시간 로깅 리스트
@@ -209,7 +232,7 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
         print(f"[ERROR] Move Failed: {e}")
         return False
 
-    stop_target = target_weight - STOP_THRESHOLD
+    stop_target = target_weight - active_stop_thresh # [수정] 동적 Threshold 적용
 
     while rclpy.ok():
         # STOP 들어오면: 자세 복귀 후 종료(노드 유지)
@@ -244,30 +267,21 @@ def perform_task(node: TaskPouring, target_weight: float) -> bool:
             time.sleep(3.0)
             final_settled_weight = float(node.current_weight)
             
-            calc_metrics(log_t, log_w, target_weight, final_settled_weight) # [추가] 정량 지표 계산 및 출력
+            # [수정] 동적 파라미터 로깅 함수로 전달
+            calc_metrics(log_t, log_w, target_weight, final_settled_weight, active_p_gain, active_max_tilt_step, active_stop_thresh) 
             
             print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
-        delta, error = calculate_tilt_angle(current_weight, target_weight)
+        # [수정] 동적 튜닝값을 틸트 계산 함수에 전달
+        delta, error = calculate_tilt_angle(current_weight, target_weight, active_p_gain, active_max_tilt_step)
         log_d.append(delta) # [추가] 제어 입력 로깅
 
         try:
-            # current_joints = get_current_posj()
-            # if not current_joints:
-            #     print("[ERROR] get_current_posj() returned empty.")
-            #     return False
-
-            # target_joints = list(current_joints)
-            # target_joints[5] += delta  # J6
-
-            # movej(target_joints, vel=VELOCITY, acc=ACC) # [기존 코드 주석 처리]
-            
             rel_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, delta) # [추가] 툴 좌표계 기준 Z축 회전량(delta) 설정
             movel(rel_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1) # [추가] ref=1(툴 좌표계), mod=1(상대 이동) 적용하여 직교 제어
 
             print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f}")
-            #time.sleep(0.1)
 
         except Exception as e:
             print(f"[ERROR] Tilt Move Failed: {e}")
