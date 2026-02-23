@@ -44,7 +44,7 @@ STOP_REQUESTED = False
 
 TUBE_TUNING = {
     "LARGE": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 1.0, "STOP_THRESHOLD": 12.0},
-    "SMALL1": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 2.0},
+    "SMALL1": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 1.0},
     "SMALL2": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 2.0}
 
 }
@@ -52,8 +52,7 @@ TUBE_TUNING = {
 # ==========================================
 # [추가] 정량 지표 계산 함수
 # ==========================================
-# [수정] 동적으로 적용된 튜닝값을 로깅하기 위해 파라미터 추가
-def calc_metrics(log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step, stop_thresh):
+def calc_metrics(log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step, stop_thresh, tube_type, actual_cycle_time):
     if not log_w:
         return
     
@@ -76,24 +75,57 @@ def calc_metrics(log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step,
             
     ss_err = abs(target_w - final_w)
     
+    # [수정] 실제 측정된 cycle_time 적용 및 overhead 계산
+    error_rate = (ss_err / target_w) * 100 if target_w > 0 else 0.0
+    p_d_ratio = p_gain / d_gain if d_gain > 0 else 0.0
+    avg_pouring_rate = (final_w / rise_t) if rise_t > 0 else 0.0
+    cycle_time = actual_cycle_time # [수정] 하드코딩 제거 및 실제 시간 대입
+    overhead_time = cycle_time - set_t # [수정] 실제 시간을 바탕으로 연산
+    
     print("--- [Metrics] ---")
     print(f"Overshoot: {overshoot:.2f} g")
     print(f"Rise Time (90%): {rise_t:.2f} s")
     print(f"Settling Time (2%): {set_t:.2f} s")
     print(f"SS Error: {ss_err:.2f} g")
+    print(f"Error Rate: {error_rate:.2f} %") # [추가]
+    print(f"Avg Pouring Rate: {avg_pouring_rate:.2f} g/s") # [추가]
     print("-----------------")
 
-    # [추가] 실험 메타데이터 및 정량 지표 CSV 저장 로직 시작
-    file_path = "pouring_metrics.csv" # [추가]
-    file_exists = os.path.isfile(file_path) # [추가]
+    # [수정] 실험 메타데이터 및 신규 정량 지표 CSV 저장 로직 (헤더 및 컬럼 추가)
+    file_path = "pouring_metrics.csv"
+    file_exists = os.path.isfile(file_path)
     
     with open(file_path, mode='a', newline='') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["Timestamp", "Target_W", "Final_W", "P_GAIN", "D_GAIN", "MAX_TILT_STEP", "STOP_THRESHOLD", "Overshoot", "Rise_Time", "Settling_Time", "SS_Error"])
+            writer.writerow([
+                "Timestamp", "Target_W", "Final_W", "P_GAIN", "D_GAIN", "MAX_TILT_STEP", 
+                "STOP_THRESHOLD", "Overshoot(g)", "Rise_Time", "Settling_Time", "SS_Error(g)", 
+                "Material", "Error_Rate(%)", "P_D_Ratio", "Avg_Pouring_Rate(g/s)", "Cycle_Time", "Overhead_Time"
+            ]) # [추가] 신규 컬럼 헤더 반영
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        writer.writerow([timestamp, target_w, final_w, p_gain, d_gain, max_tilt_step, stop_thresh, round(overshoot, 2), round(rise_t, 2), round(set_t, 2), round(ss_err, 2)])
+        writer.writerow([
+            timestamp, 
+            round(target_w, 2), 
+            round(final_w, 2), 
+            round(p_gain, 3), 
+            round(d_gain, 3), 
+            round(max_tilt_step, 2), 
+            round(stop_thresh, 2), 
+            round(overshoot, 2), 
+            round(rise_t, 2), 
+            round(set_t, 2), 
+            round(ss_err, 2),
+            tube_type, # [추가] Material 컬럼에 시험관 종류 할당
+            round(error_rate, 2), # [추가]
+            round(p_d_ratio, 2), # [추가]
+            round(avg_pouring_rate, 2), # [추가]
+            round(cycle_time, 2), # [추가]
+            round(overhead_time, 2) # [추가]
+        ])
+
+
 # ==========================================
 # 2. 통신 전담 노드 (서비스 & 토픽)
 # ==========================================
@@ -304,10 +336,13 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
             
             time.sleep(3.0)
             final_settled_weight = float(node.current_weight)
+
+            actual_cycle_time = time.time() - start_t
             
             # [수정] 동적 파라미터 로깅 함수로 전달
-            calc_metrics(log_t, log_w, target_weight, final_settled_weight, active_p_gain, active_d_gain,active_max_tilt_step, active_stop_thresh) 
-            
+            calc_metrics(log_t, log_w, target_weight, final_settled_weight, 
+                         active_p_gain, active_d_gain, active_max_tilt_step, active_stop_thresh, 
+                         tube_type, actual_cycle_time)            
             print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
