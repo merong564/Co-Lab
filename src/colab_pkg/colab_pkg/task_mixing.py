@@ -47,7 +47,7 @@ class TaskMixing(Node):
         self.pos_mixer_pick        = [87.752, 443.877, 236.217, 114.003, 179.135, 113.295]
         self.pos_mixer_pick_safe   = [87.752, 190.136, 236.217, 114.003, 179.135, 113.295]
         self.pos_mixer_mix_safe    = [349.592, 93.050, 233.490, 123.441, 179.314, 122.717]
-        self.pos_mixer_mix_down    = [349.592, 93.050, 155.172, 123.441, 179.314, 122.717]
+        self.pos_mixer_mix_down    = [349.592, 93.050, 135.172, 123.441, 179.314, 122.717]
 
         self.get_logger().info("TaskMixing Ready. Service: execute_mixing")
 
@@ -163,7 +163,7 @@ class TaskMixing(Node):
 
             log("[3-1] 믹서 털기 완료")
 
-        def mixer_descend_and_wiggle(end_pos_list, fz_trigger=7.0, down_force=-10.0):
+        def mixer_descend_and_wiggle(end_pos_list, fz_trigger=7.0, down_force=-20.0):
             def _get_fz():
                 ret = get_tool_force(DR_TOOL)
                 if ret is None or isinstance(ret, int) or len(ret) < 3:
@@ -202,13 +202,13 @@ class TaskMixing(Node):
                     log(f"[도달] 목표 높이 도달 (현재 Z: {curr_z:.2f})")
                     break
 
-                # curr_pos[2] -= 2.0
-                # if curr_pos[2] < target_z:
-                #     curr_pos[2] = target_z
-                # movel(posx(curr_pos), vel=10, acc=10, ref=DR_BASE)
+                curr_pos[2] -= 2.0
+                if curr_pos[2] < target_z:
+                    curr_pos[2] = target_z
+                movel(posx(curr_pos), vel=10, acc=10, ref=DR_BASE)
 
                 move_periodic(
-                    amp=[0, 0, -5, 0, 0, 15],
+                    amp=[0, 0, -5, 0, 0, 25],
                     period=1.0,
                     atime=0.2,
                     repeat=1,
@@ -237,6 +237,9 @@ class TaskMixing(Node):
         pick_and_ready_mixer()
         wait(0.2)
 
+        # 잡은 상태에서 시작하고 싶은 경우
+        # movel(posx(self.pos_mixer_mix_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+
         log("[3] 순응 제어 기반 혼합 시작")
         mixer_descend_and_wiggle(
             end_pos_list=self.pos_mixer_mix_down,
@@ -250,7 +253,7 @@ class TaskMixing(Node):
             tap_mm=25.0,
             tap_count=12,
             up_vel=60, up_acc=60,
-            down_vel=350, down_acc=500
+            down_vel=600, down_acc=900
         )
 
         return_mixer()
