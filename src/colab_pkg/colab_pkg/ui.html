@@ -447,7 +447,13 @@
         }
     });
 
-    function updatePhaseDisplay(newPhase) {
+    // [수정] 대소문자 상관없이(예: "pouring", "POURING") 완벽히 인식하도록 안전 장치 추가
+    function updatePhaseDisplay(rawPhase) {
+        if (!rawPhase) return;
+        
+        // 첫 글자 대문자, 나머지 소문자로 통일 (예: "mixing" -> "Mixing")
+        const newPhase = rawPhase.trim().charAt(0).toUpperCase() + rawPhase.trim().slice(1).toLowerCase();
+
         if(currentPhase !== newPhase) {
             currentPhase = newPhase;
             const badge = document.getElementById('phase-badge');
