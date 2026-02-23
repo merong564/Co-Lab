@@ -4,7 +4,7 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260220_v01 (Service Client Implemented + Experiment History Archiving)
+[Version] 260223_v01 (Service Client Implemented + Experiment History Archiving)
 [Description] Firebase 명령을 받아 /start_process 서비스를 호출하는 브릿지 및 결과 히스토리 DB 저장
 """
 
@@ -33,7 +33,8 @@ class UserInterface(Node):
         
         # 1. Firebase 초기화
         try:
-            cred = credentials.Certificate("serviceAccountKey.json")
+            # [수정] 실행 위치와 상관없이 키를 찾을 수 있도록 절대 경로 적용
+            cred = credentials.Certificate("/home/rokey/Co-Lab/serviceAccountKey.json")
             if not firebase_admin._apps:
                 firebase_admin.initialize_app(cred, {
                     'databaseURL': 'https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app'
@@ -217,6 +218,13 @@ class UserInterface(Node):
             self.get_logger().info(f"💾 [DB 저장 성공] ID: {new_record.key} | 오차: {error_rate}%")
         except Exception as e:
             self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
+
+    # [추가] 에러 해결: 누락되었던 콜백 함수 복구
+    def joint_callback(self, msg): 
+        pass
+        
+    def weight_callback(self, msg): 
+        self.latest_weight = msg.data
 
 def main(args=None):
     rclpy.init(args=args)
