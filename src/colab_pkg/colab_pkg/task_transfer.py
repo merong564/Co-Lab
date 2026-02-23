@@ -102,6 +102,7 @@ def get_poses(posx_func):
             "PICK_UP":   posx_func(306.636, -66.725, 257.898, 91.356, 91.786, 90.102),
             "POUR_UP": posx_func(585.440, 157.760, 242.631, 91.920, 97.360, 88.550),
             "POUR_READY": posx_func(585.440, 157.760, 180.631, 91.920, 97.360, 88.550),
+            "RETURN_READY": posx_func(303.736, 81.616, 230.386, 91.920, 97.360, 88.550),
             "RETURN_UP": posx_func(417.368, 608.704, 260.356, 90.362, 91.682, 89.077),
             "RETURN_DOWN": posx_func(417.368, 608.704, 104.231, 90.362, 91.682, 89.077)
         },
@@ -164,6 +165,8 @@ def perform_task(mode, tube_type):
         wait(2.0)
 
     def gripper_large_open():
+        set_digital_output(1, OFF)
+        set_digital_output(2, OFF)
         set_digital_output(3, ON)
         set_digital_output(4, OFF)
         wait(2.0)
@@ -225,6 +228,9 @@ def perform_task(mode, tube_type):
         _check_stop("before movel POUR_READY to POUR_UP")
         movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
         movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        # [추가] 비커의 PICK_UP 위치로 이동
+        _check_stop("before movel BEAKER PICK_UP")
+        movel(P["RETURN_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
         _check_stop("before movel RETURN_UP")
         movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
         _check_stop("before movel RETURN_DOWN")
