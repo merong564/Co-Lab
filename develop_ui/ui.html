@@ -65,24 +65,14 @@
                     <label class="form-label fw-bold">레시피 선택 (비즈 조합)</label>
                     <div class="row g-2 mb-3">
                         <div class="col-12">
-                            <input type="radio" class="btn-check" name="material" id="rec_1" value="Recipe 1 (하얀색24/주황색15)" checked onchange="updateTargetWeight(39)">
+                            <input type="radio" class="btn-check" name="material" id="rec_1" value="Test Recipe (무지개21/푸른색14/자갈100)" checked onchange="updateTargetWeight(135)">
                             <label class="btn btn-outline-primary w-100 recipe-label" for="rec_1" style="text-align: left; padding: 10px 15px;">
-                                <strong>Recipe #1 (Total 39g)</strong><br>
-                                <small style="font-size: 0.8rem; opacity: 0.8;"><i class="fas fa-circle text-secondary"></i> 하얀색 볼드비즈 24g | <i class="fas fa-circle" style="color:#fd7e14;"></i> 컬러유광비즈(주황색) 15g</small>
-                            </label>
-                        </div>
-                        <div class="col-12">
-                            <input type="radio" class="btn-check" name="material" id="rec_2" value="Recipe 2 (하얀색24/주황색15/푸른색24)" onchange="updateTargetWeight(63)">
-                            <label class="btn btn-outline-success w-100 recipe-label" for="rec_2" style="text-align: left; padding: 10px 15px;">
-                                <strong>Recipe #2 (Total 63g)</strong><br>
-                                <small style="font-size: 0.8rem; opacity: 0.8;"><i class="fas fa-circle text-secondary"></i> 하얀색 볼드비즈 24g | <i class="fas fa-circle" style="color:#fd7e14;"></i> 컬러유광비즈(주황색) 15g | <i class="fas fa-circle text-primary"></i> 푸른색 볼드비즈 24g</small>
-                            </label>
-                        </div>
-                        <div class="col-12">
-                            <input type="radio" class="btn-check" name="material" id="rec_3" value="Recipe 3 (하얀색48/주황색15/푸른색24)" onchange="updateTargetWeight(87)">
-                            <label class="btn btn-outline-secondary w-100 recipe-label" for="rec_3" style="text-align: left; padding: 10px 15px;">
-                                <strong>Recipe #3 (Total 87g)</strong><br>
-                                <small style="font-size: 0.8rem; opacity: 0.8;"><i class="fas fa-circle text-secondary"></i> 하얀색 볼드비즈 48g | <i class="fas fa-circle" style="color:#fd7e14;"></i> 컬러유광비즈(주황색) 15g | <i class="fas fa-circle text-primary"></i> 푸른색 볼드비즈 24g</small>
+                                <strong>오늘의 과제 레시피 (Total 135g)</strong><br>
+                                <small style="font-size: 0.8rem; opacity: 0.8;">
+                                    <i class="fas fa-circle" style="color: #e83e8c;"></i> 무지개 비즈 21g | 
+                                    <i class="fas fa-circle text-primary"></i> 푸른색 구슬 14g | 
+                                    <i class="fas fa-circle text-secondary"></i> 자갈 100g
+                                </small>
                             </label>
                         </div>
                     </div>
@@ -90,7 +80,7 @@
                     <div class="row mb-3">
                         <div class="col-6">
                             <label class="form-label fw-bold">목표 무게 (g)</label>
-                            <input type="number" id="target_weight" class="form-control text-center fw-bold" value="39" step="1">
+                            <input type="number" id="target_weight" class="form-control text-center fw-bold" value="135" step="1">
                         </div>
                         <div class="col-6">
                             <label class="form-label fw-bold">섞는 시간 (s)</label>
