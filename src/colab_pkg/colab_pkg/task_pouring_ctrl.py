@@ -31,20 +31,29 @@ FINGER_TCP_OFFSET = [-32.0, 0.0, 228.0, 0.0, 0.0, 0.0] # [추가] 비커 쪽 집
 
 VELOCITY = 40
 ACC = 60
-P_GAIN = 0.015
-D_GAIN = 0.08 # [추가] 미분 게인 (재료가 쏟아질 때 브레이크 강도)
+# P_GAIN = 0.015
+# D_GAIN = 0.08 # [추가] 미분 게인 (재료가 쏟아질 때 브레이크 강도)
+# MAX_TILT_STEP = 1.0
+# STOP_THRESHOLD = 12.0
+
 prev_error = 0.0 # [추가] 이전 오차 저장용 변수
-MAX_TILT_STEP = 1.0
-STOP_THRESHOLD = 12.0
+
 
 # STOP 신호 플래그 (STOP 토픽 받으면 True)
 STOP_REQUESTED = False
+
+TUBE_TUNING = {
+    "LARGE": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 1.0, "STOP_THRESHOLD": 12.0},
+    "SMALL1": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 2.0},
+    "SMALL2": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 0.5, "STOP_THRESHOLD": 2.0}
+
+}
 
 # ==========================================
 # [추가] 정량 지표 계산 함수
 # ==========================================
 # [수정] 동적으로 적용된 튜닝값을 로깅하기 위해 파라미터 추가
-def calc_metrics(log_t, log_w, target_w, final_w, p_gain, max_tilt_step, stop_thresh):
+def calc_metrics(log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step, stop_thresh):
     if not log_w:
         return
     
@@ -78,14 +87,13 @@ def calc_metrics(log_t, log_w, target_w, final_w, p_gain, max_tilt_step, stop_th
     file_path = "pouring_metrics.csv" # [추가]
     file_exists = os.path.isfile(file_path) # [추가]
     
-    with open(file_path, mode='a', newline='') as f: # [추가]
-        writer = csv.writer(f) # [추가]
-        if not file_exists: # [추가] 헤더가 없을 경우 생성
-            writer.writerow(["Timestamp", "Target_W", "Final_W", "P_GAIN", "D_GAIN", "MAX_TILT_STEP", "STOP_THRESHOLD", "Overshoot", "Rise_Time", "Settling_Time", "SS_Error"]) # [추가]
+    with open(file_path, mode='a', newline='') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["Timestamp", "Target_W", "Final_W", "P_GAIN", "D_GAIN", "MAX_TILT_STEP", "STOP_THRESHOLD", "Overshoot", "Rise_Time", "Settling_Time", "SS_Error"])
         
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # [추가]
-        writer.writerow([timestamp, target_w, final_w, P_GAIN, D_GAIN, MAX_TILT_STEP, STOP_THRESHOLD, round(overshoot, 2), round(rise_t, 2), round(set_t, 2), round(ss_err, 2)]) # [추가]
-
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        writer.writerow([timestamp, target_w, final_w, p_gain, d_gain, max_tilt_step, stop_thresh, round(overshoot, 2), round(rise_t, 2), round(set_t, 2), round(ss_err, 2)])
 # ==========================================
 # 2. 통신 전담 노드 (서비스 & 토픽)
 # ==========================================
@@ -171,39 +179,37 @@ def initialize_robot():
     except Exception as e:
         print(f" [Thread] Init Failed: {e}")
 
-# [수정] 동적 튜닝 파라미터를 인자로 받도록 수정
-def calculate_tilt_angle(current_w: float, target_w: float, p_gain: float, max_tilt_step: float):
-    error = target_w - current_w
-    delta_angle = error * p_gain # [수정]
+# # [수정] 동적 튜닝 파라미터를 인자로 받도록 수정
+# def calculate_tilt_angle(current_w: float, target_w: float, p_gain: float, max_tilt_step: float):
+#     error = target_w - current_w
+#     delta_angle = error * p_gain # [수정]
 
-    if delta_angle > max_tilt_step: # [수정]
-        delta_angle = max_tilt_step
-    elif delta_angle < -max_tilt_step: # [수정]
-        delta_angle = -max_tilt_step
+#     if delta_angle > max_tilt_step: # [수정]
+#         delta_angle = max_tilt_step
+#     elif delta_angle < -max_tilt_step: # [수정]
+#         delta_angle = -max_tilt_step
 
-    return float(delta_angle), float(error)
+#     return float(delta_angle), float(error)
 
-def calculate_tilt_angle_pd(current_w: float, target_w: float): # [추가] 순수 PD 제어기
-    global prev_error, P_GAIN, D_GAIN, MAX_TILT_STEP # [추가]
+def calculate_tilt_angle_pd(current_w: float, target_w: float, p_gain: float, d_gain: float, max_tilt_step: float): # [추가] 순수 PD 제어기
+    global prev_error
     
     error = target_w - current_w # [추가]
     
     # [추가] PD 제어 계산 (단일 P_GAIN 유지)
-    p_term = error * P_GAIN # [추가]
-    d_term = (error - prev_error) * D_GAIN # [추가] 무게가 갑자기 쏟아지면 음수값이 커짐
+    p_term = error * p_gain
+    d_term = (error - prev_error) * d_gain
     prev_error = error # [추가] 현재 오차를 다음 사이클을 위해 저장
     
     delta_angle = p_term + d_term # [추가]
     
-    # [추가] 출력 제한 (클램핑)
-    if delta_angle > MAX_TILT_STEP: # [추가]
-        delta_angle = MAX_TILT_STEP # [추가]
-    elif delta_angle < -MAX_TILT_STEP: # [추가]
-        delta_angle = -MAX_TILT_STEP # [추가]
-        
+    if delta_angle > max_tilt_step: # [추가] 동적으로 전달받은 max_tilt_step 적용
+        delta_angle = max_tilt_step 
+    elif delta_angle < -max_tilt_step: 
+        delta_angle = -max_tilt_step
+
     return float(delta_angle), float(error) # [추가]
 
-# [수정] tube_type 파라미터 추가
 def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARGE") -> bool:
     from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait
     from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
@@ -217,19 +223,15 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     global P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD # [추가] 전역 변수 선언
     global prev_error
 
-    # # [추가] 목표 무게에 따른 파라미터 분기
-    # if target_weight < 100.0:
-    #     P_GAIN = 0.03
-    #     MAX_TILT_STEP = 3.0
-    #     STOP_THRESHOLD = 10.0
-    # else:
-    #     P_GAIN = 0.01
-    #     MAX_TILT_STEP = 1.0
-    #     STOP_THRESHOLD = 20.0
+    # [추가] 정의되지 않은 시험관 입력 시 예외 처리 및 작업 중단
+    if tube_type not in TUBE_TUNING:
+        print(f"[ERROR] Invalid tube type: {tube_type}")
+        return False
 
     # [추가] 타겟 종류에 맞는 튜닝 파라미터 설정
-    tuning = TUBE_TUNING.get(tube_type, TUBE_TUNING["LARGE"])
+    tuning = TUBE_TUNING[tube_type]
     active_p_gain = tuning["P_GAIN"]
+    active_d_gain = tuning["D_GAIN"]
     active_max_tilt_step = tuning["MAX_TILT_STEP"]
     active_stop_thresh = tuning["STOP_THRESHOLD"]
 
@@ -240,7 +242,10 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     log_w = [] # [추가] 현재 무게 로깅 리스트
     log_d = [] # [추가] 제어 입력(delta) 로깅 리스트
 
-    pour_ready_pos = posx(585.440, 157.760, 160.631, 91.920, 97.360, 88.550)
+    if tube_type == "LARGE":
+        pour_ready_pos = posx(585.440, 157.760, 160.631, 91.920, 97.360, 88.550)
+    else: # "SMALL1", "SMALL2"
+        pour_ready_pos = posx(585.440, 144.760, 160.631, 91.920, 97.360, 88.550)
 
     # 시작 자세로 이동
     try:
@@ -252,11 +257,19 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         set_robot_mode(ROBOT_MODE_AUTONOMOUS) # [추가]
         time.sleep(0.5)
 
+        # [추가] 작은 시험관일 경우 초기 80도 급속 틸팅 수행
+        if tube_type in ["SMALL1", "SMALL2"]:
+            print(f"[SYSTEM] Initial 80 deg fast tilt for {tube_type}") # [추가] 상태 출력
+            init_tilt_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, 80.0) # [추가] 툴 Z축 기준 80도 회전
+            movel(init_tilt_pos, vel=60, acc=80, ref=1, mod=1) # [추가] 툴 좌표계 기준 상대 이동
+            wait(0.5) # [추가] 안정화 대기
+
     except Exception as e:
         print(f"[ERROR] Move Failed: {e}")
         return False
 
-    stop_target = target_weight - STOP_THRESHOLD
+    # stop_target = target_weight - STOP_THRESHOLD
+    stop_target = target_weight - active_stop_thresh
     prev_error = target_weight - float(node.current_weight)
 
     while rclpy.ok():
@@ -293,13 +306,13 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
             final_settled_weight = float(node.current_weight)
             
             # [수정] 동적 파라미터 로깅 함수로 전달
-            calc_metrics(log_t, log_w, target_weight, final_settled_weight, active_p_gain, active_max_tilt_step, active_stop_thresh) 
+            calc_metrics(log_t, log_w, target_weight, final_settled_weight, active_p_gain, active_d_gain,active_max_tilt_step, active_stop_thresh) 
             
             print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
         #delta, error = calculate_tilt_angle(current_weight, target_weight)
-        delta, error = calculate_tilt_angle_pd(current_weight, target_weight) # [추가] 순수 PD 제어 함수로 변경
+        delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step) # [추가] 순수 PD 제어 함수로 변경
 
         log_d.append(delta) # [추가] 제어 입력 로깅
 
