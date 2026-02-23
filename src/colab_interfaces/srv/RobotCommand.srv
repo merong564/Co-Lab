@@ -1,11 +1,11 @@
 # colab_interfaces/srv/RobotCommand.srv
 
 # Request
-string mode              # 동작 모드 (move, home, start)
-string target            # 재료 (LARGE, SMALL1, SMALL2)
-float32 target_weight    # 사용자가 입력한 목표 무게 [g]
+string mode
+string[] targets           # [추가] 여러 재료 리스트 (예: ["LARGE", "SMALL1"])
+float32[] target_weights   # [추가] 각 재료에 대한 목표 무게 리스트 [g]
 float32 mixing_duration    # 섞는 시간 [sec]
 ---
 # Response
-bool success             # 작업 성공 여부
-string message           # 결과 메시지
+bool success             
+string message

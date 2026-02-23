@@ -63,10 +63,10 @@ class TaskTransfer(Node):
             return
 
         STOP_REQUESTED = True
-        self.get_logger().warn("🚨 STOP received")
+        self.get_logger().warn("[WARN] STOP received") 
 
         if CRASH_ON_STOP:
-            # ✅ 의도적으로 에러 띄워서 정지(노드 종료)
+            # 의도적으로 에러 띄워서 정지(노드 종료)
             raise RuntimeError("EMERGENCY STOP (intentional crash)")
 
     def execute_transfer_callback(self, request, response):
@@ -75,8 +75,9 @@ class TaskTransfer(Node):
 
         mode = (getattr(request, "mode", "") or "").strip().upper()
 
-        # [추가] 서비스 request 데이터에서 시험관 종류를 동적으로 파악
-        tube_type = getattr(request, "target", "LARGE").strip().upper()
+        # [수정] 서비스 request 데이터에서 시험관 종류를 동적으로 파악 (배열 인터페이스 반영)
+        targets_list = getattr(request, "targets", ["LARGE"])
+        tube_type = targets_list[0].strip().upper() if targets_list else "LARGE"
 
         self.get_logger().info(f"[Service] Request Received. Mode: {mode}, Tube: {tube_type}")
 
