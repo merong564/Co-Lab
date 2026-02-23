@@ -60,6 +60,7 @@ class UserInterface(Node):
         self.current_target_weight = 0.0
         self.current_material = "Unknown"
         self.last_total_count = 0 
+        self.is_first_msg = True # [수정] 통신 연결 후 첫 번째 메시지를 구별하는 안전 플래그 추가
 
     def loop_callback(self):
         self.check_firebase_commands()
@@ -98,22 +99,16 @@ class UserInterface(Node):
         req = RobotCommand.Request()
         req.mode = "FULL"
         
-        # [수정] 시작: 웹에서 넘겨준 재료 문자열에서 숫자를 추출해 리스트로 묶기
         match = re.search(r'무지개(\d+(\.\d+)?)/푸른색(\d+(\.\d+)?)/자갈(\d+(\.\d+)?)', self.current_material)
         if match:
-            # [수정] 매칭 성공 시 무조건 LARGE가 먼저 오도록 (LARGE, SMALL1, SMALL2) 순서로 배열 생성
-            # match.group(5) = 자갈, match.group(1) = 무지개, match.group(3) = 푸른색
             req.targets = ["LARGE", "SMALL1", "SMALL2"]
             req.target_weights = [float(match.group(5)), float(match.group(1)), float(match.group(3))]
         else:
-            # 형식이 맞지 않을 경우의 방어 코드
             req.targets = ["LARGE"]
             req.target_weights = [float(cmd_data.get('target_weight', 0.0))]
-        # [수정] 끝
         
         req.mixing_duration = float(cmd_data.get('mixing_duration', 0.0))
 
-        # [수정] 로그 출력 문구를 리스트 형태에 맞게 변경
         self.get_logger().info(f"📤 서비스 요청 보냄: Targets={req.targets}, Weights={req.target_weights}g, Mix={req.mixing_duration}s")
         
         self.future = self.cli.call_async(req)
@@ -147,10 +142,16 @@ class UserInterface(Node):
             pass
 
     def system_status_callback(self, msg):
-        if hasattr(self, 'last_total_count') and msg.total_count > self.last_total_count:
-            if self.last_total_count != 0: 
-                self.save_experiment_history(msg)
+        # [수정] 시작: 로봇 노드가 재시작되거나 1회차 완료 시 저장이 누락(Skip)되는 버그 완벽 해결
+        if getattr(self, 'is_first_msg', True):
+            # 처음 통신이 연결되었을 때는 현재 카운트 상태만 동기화하고 넘어감
             self.last_total_count = msg.total_count
+            self.is_first_msg = False
+        elif msg.total_count > self.last_total_count:
+            # 기존 카운트가 0이든 5든 상관없이 숫자가 올라갔다면 무조건 저장
+            self.save_experiment_history(msg)
+            self.last_total_count = msg.total_count
+        # [수정] 끝
 
         self.latest_system_status = {
             "phase": msg.phase,
