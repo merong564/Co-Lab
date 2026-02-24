@@ -21,3 +21,6 @@ Thumbs.db
 
 # 4. 로그 파일 등
 *.log
+build/
+install/
+log/
