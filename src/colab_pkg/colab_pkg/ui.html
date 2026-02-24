@@ -223,7 +223,21 @@
                     </div>
                 </div>
             </div>
-
+            <div class="card mb-3">
+                <div class="card-header"><i class="fas fa-cogs"></i> Control Parameters</div>
+                <div class="card-body text-center p-2">
+                    <div class="row g-2 align-items-center">
+                        <div class="col-6 border-end">
+                            <small class="text-muted d-block" style="font-size: 0.7rem;">Max Tilt Step</small>
+                            <span class="fw-bold text-primary"><span id="val_max_step">0.0</span>&deg;</span>
+                        </div>
+                        <div class="col-6">
+                            <small class="text-muted d-block" style="font-size: 0.7rem;">Stop Threshold</small>
+                            <span class="fw-bold text-danger"><span id="val_stop_th">0.0</span>g</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class="card flex-grow-1">
                 <div class="card-header bg-dark text-white py-2"><small><i class="fas fa-terminal"></i> System Log</small></div>
                 <div class="card-body bg-light p-2">
@@ -398,6 +412,14 @@
         if(stats.tcp_acc !== undefined) document.getElementById('val_acc').innerText = stats.tcp_acc;
         if(stats.pour_speed !== undefined) document.getElementById('pour_speed').innerText = stats.pour_speed;
         
+        // [추가] 붓기 노드에서 넘어오는 튜닝 파라미터 연동
+        if(stats.max_tilt_step !== undefined) {
+            document.getElementById('val_max_step').innerText = stats.max_tilt_step.toFixed(1);
+        }
+        if(stats.stop_threshold !== undefined) {
+            document.getElementById('val_stop_th').innerText = stats.stop_threshold.toFixed(1);
+        }
+
         if(stats.phase) updatePhaseDisplay(stats.phase);
 
         if(stats.total_count !== undefined) document.getElementById('total_count').innerText = stats.total_count;
@@ -588,6 +610,6 @@
         document.body.appendChild(link);
         link.click();
     }
-</script>
+</script> 
 </body>
 </html>
