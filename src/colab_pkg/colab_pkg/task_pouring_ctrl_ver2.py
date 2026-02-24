@@ -15,8 +15,8 @@ import DR_init
 
 from colab_interfaces.srv import RobotCommand
 from std_msgs.msg import Float32, String
-from colab_interfaces.msg import SystemStatus 
-from colab_interfaces.msg import ControlMetrics 
+from colab_interfaces.msg import SystemStatus, ControlMetrics # 💡 [수정] ControlMetrics 임포트 추가
+
 # ==========================================
 # 1. 설정 및 상수
 # ==========================================
@@ -84,11 +84,17 @@ def calc_metrics(node, log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt
     print(f"Avg Pouring Rate: {avg_pouring_rate:.2f} g/s") 
     print("-----------------")
 
-    # 💡 [Phase: Ready] 작업 완료 후 대기 상태로 전환
+    # 💡 [수정] 시스템 상태 토픽 발행 (제어 지표 제외)
     node.publish_system_status(
         phase="Ready", 
-        p=p_gain, d=d_gain, max_step=max_tilt_step, stop_th=stop_thresh,
-        overshoot=overshoot, rise=rise_t, settle=set_t, err_rate=error_rate, cycle_t=cycle_time
+        err_rate=error_rate, 
+        cycle_t=cycle_time
+    )
+
+    # 💡 [추가] 제어 성능 데이터 전용 토픽 발행 (DB 저장용)
+    node.publish_control_metrics(
+        p_gain=p_gain, d_gain=d_gain, max_tilt_step=max_tilt_step, stop_thresh=stop_thresh,
+        p_d_ratio=p_d_ratio, overshoot=overshoot, rise_time=rise_t, settling_time=set_t, ss_error=ss_err
     )
 
     file_path = "pouring_metrics.csv"
@@ -125,6 +131,8 @@ class TaskPouring(Node):
         self.success_count = 0
 
         self.pub_status = self.create_publisher(SystemStatus, "system_status", 10, callback_group=self.callback_group)
+        # 💡 [추가] ControlMetrics 발행기 추가
+        self.pub_metrics = self.create_publisher(ControlMetrics, "control_metrics", 10, callback_group=self.callback_group)
 
         self.srv_pouring = self.create_service(
             RobotCommand,
@@ -149,9 +157,8 @@ class TaskPouring(Node):
             callback_group=self.callback_group,
         )
 
-    def publish_system_status(self, phase="Ready", tcp_vel=0.0, tcp_acc=0.0, pour_speed=0.0, 
-                             p=0.0, d=0.0, overshoot=0.0, rise=0.0, settle=0.0, 
-                             err_rate=0.0, cycle_t=0.0, max_step=0.0, stop_th=0.0):
+    # 💡 [수정] SystemStatus에서 제어 지표(p, d, overshoot 등) 관련 파라미터 전부 제거
+    def publish_system_status(self, phase="Ready", tcp_vel=0.0, tcp_acc=0.0, pour_speed=0.0, err_rate=0.0, cycle_t=0.0):
         msg = SystemStatus()
         msg.phase = phase
         msg.tcp_vel = float(tcp_vel)
@@ -163,19 +170,22 @@ class TaskPouring(Node):
         msg.error_rate = float(err_rate)
         msg.last_cycle_time = float(cycle_t)
         
-        msg.p_gain = float(p)
-        msg.d_gain = float(d)
-        msg.overshoot = float(overshoot)
-        msg.rise_time = float(rise)
-        msg.settling_time = float(settle)
-        
-        try:
-            msg.max_tilt_step = float(max_step)
-            msg.stop_threshold = float(stop_th)
-        except AttributeError:
-            pass 
-
         self.pub_status.publish(msg)
+
+    # 💡 [추가] ControlMetrics 전용 발행 함수
+    def publish_control_metrics(self, p_gain, d_gain, max_tilt_step, stop_thresh, p_d_ratio, overshoot, rise_time, settling_time, ss_error):
+        msg = ControlMetrics()
+        msg.p_gain = float(p_gain)
+        msg.d_gain = float(d_gain)
+        msg.max_tilt_step = float(max_tilt_step)
+        msg.stop_threshold = float(stop_thresh)
+        msg.p_d_ratio = float(p_d_ratio)
+        msg.overshoot = float(overshoot)
+        msg.rise_time = float(rise_time)
+        msg.settling_time = float(settling_time)
+        msg.ss_error = float(ss_error)
+        
+        self.pub_metrics.publish(msg)
 
     def stop_callback(self, msg: String):
         global STOP_REQUESTED
@@ -193,8 +203,8 @@ class TaskPouring(Node):
 
         self.total_count += 1
         
-        # 💡 [Phase: Transfer] 서비스 받자마자 이동 시작 단계 알림
-        self.publish_system_status(phase="Transfer", p=TUBE_TUNING.get(tube_type, {}).get("P_GAIN", 0.0))
+        # 💡 [수정] 이동 시작 단계 알림 (p_gain 제거)
+        self.publish_system_status(phase="Transfer")
 
         # 💡 [데드락 방지] 로봇 제어 로직을 별도 스레드에서 실행
         res_container = [False]
@@ -383,13 +393,12 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step) 
         log_d.append(delta) 
 
-        # 💡 [Phase: Pouring] 붓기 중 실시간 상태 발행 (.msg 필드명과 정확히 매칭)
+        # 💡 [수정] 붓기 중 실시간 상태 발행 (p, d 제어값 제거)
         node.publish_system_status(
             phase="Pouring", 
             tcp_vel=tcp_vel, 
             tcp_acc=tcp_acc, 
-            pour_speed=pour_speed,
-            p=active_p_gain, d=active_d_gain, max_step=active_max_tilt_step, stop_th=active_stop_thresh
+            pour_speed=pour_speed
         )
 
         try:
