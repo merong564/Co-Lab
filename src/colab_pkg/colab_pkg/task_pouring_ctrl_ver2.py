@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import time
 import threading
-import csv # [추가] CSV 로깅용 모듈 임포트
-import os # [추가] 파일 존재 여부 확인용 모듈 임포트
-from datetime import datetime # [추가] 실험 일시 기록용 모듈 임포트
+import csv 
+import os 
+from datetime import datetime 
+import math # [추가] 속도/가속도 벡터 연산을 위한 모듈
 
 import rclpy
 from rclpy.node import Node
@@ -14,6 +15,7 @@ import DR_init
 
 from colab_interfaces.srv import RobotCommand
 from std_msgs.msg import Float32, String
+from colab_interfaces.msg import SystemStatus 
 
 # ==========================================
 # 1. 설정 및 상수
@@ -23,36 +25,28 @@ ROBOT_MODEL = "m0609"
 ROBOT_TOOL = "Tool Weight"
 ROBOT_TCP = "GripperDA_v1"
 
-NEW_TCP_NAME = "CustomTCP" # [추가] 새 TCP 이름
-NEW_TCP_OFFSET = [0.0, 0.0, 228.0, 0.0, 0.0, 0.0] # [추가] 새 TCP 오프셋 [X, Y, Z, Rx, Ry, Rz]
+NEW_TCP_NAME = "CustomTCP" 
+NEW_TCP_OFFSET = [0.0, 0.0, 228.0, 0.0, 0.0, 0.0] 
 
-FINGER_TCP_NAME = "FingerTCP" # [추가] 집게 끝단 기준 새 TCP 이름
-FINGER_TCP_OFFSET = [-32.0, 0.0, 228.0, 0.0, 0.0, 0.0] # [추가] 비커 쪽 집게 위치 오프셋 (실제 거리에 맞춰 Y 또는 X축 값 수정 필요)
+FINGER_TCP_NAME = "FingerTCP" 
+FINGER_TCP_OFFSET = [-32.0, 0.0, 228.0, 0.0, 0.0, 0.0] 
 
 VELOCITY = 40
 ACC = 60
-# P_GAIN = 0.015
-# D_GAIN = 0.08 # [추가] 미분 게인 (재료가 쏟아질 때 브레이크 강도)
-# MAX_TILT_STEP = 1.0
-# STOP_THRESHOLD = 12.0
 
-prev_error = 0.0 # [추가] 이전 오차 저장용 변수
-
-
-# STOP 신호 플래그 (STOP 토픽 받으면 True)
+prev_error = 0.0 
 STOP_REQUESTED = False
 
 TUBE_TUNING = {
     "LARGE": {"P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 1.0, "STOP_THRESHOLD": 12.0},
     "SMALL1": {"P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 1.5},
     "SMALL2": {"P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 1.5}
-
 }
 
 # ==========================================
-# [추가] 정량 지표 계산 함수
+# 정량 지표 계산 함수 (node 파라미터 추가)
 # ==========================================
-def calc_metrics(log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step, stop_thresh, tube_type, actual_cycle_time):
+def calc_metrics(node, log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step, stop_thresh, tube_type, actual_cycle_time):
     if not log_w:
         return
     
@@ -75,23 +69,27 @@ def calc_metrics(log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step,
             
     ss_err = abs(target_w - final_w)
     
-    # [수정] 실제 측정된 cycle_time 적용 및 overhead 계산
     error_rate = (ss_err / target_w) * 100 if target_w > 0 else 0.0
     p_d_ratio = p_gain / d_gain if d_gain > 0 else 0.0
     avg_pouring_rate = (final_w / rise_t) if rise_t > 0 else 0.0
-    cycle_time = actual_cycle_time # [수정] 하드코딩 제거 및 실제 시간 대입
-    overhead_time = cycle_time - set_t # [수정] 실제 시간을 바탕으로 연산
+    cycle_time = actual_cycle_time 
+    overhead_time = cycle_time - set_t 
     
     print("--- [Metrics] ---")
     print(f"Overshoot: {overshoot:.2f} g")
     print(f"Rise Time (90%): {rise_t:.2f} s")
     print(f"Settling Time (2%): {set_t:.2f} s")
     print(f"SS Error: {ss_err:.2f} g")
-    print(f"Error Rate: {error_rate:.2f} %") # [추가]
-    print(f"Avg Pouring Rate: {avg_pouring_rate:.2f} g/s") # [추가]
+    print(f"Error Rate: {error_rate:.2f} %") 
+    print(f"Avg Pouring Rate: {avg_pouring_rate:.2f} g/s") 
     print("-----------------")
 
-    # [수정] 실험 메타데이터 및 신규 정량 지표 CSV 저장 로직 (헤더 및 컬럼 추가)
+    node.publish_system_status(
+        phase="Ready", 
+        p=p_gain, d=d_gain, max_step=max_tilt_step, stop_th=stop_thresh,
+        overshoot=overshoot, rise=rise_t, settle=set_t, err_rate=error_rate, cycle_t=cycle_time
+    )
+
     file_path = "pouring_metrics.csv"
     file_exists = os.path.isfile(file_path)
     
@@ -102,29 +100,15 @@ def calc_metrics(log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step,
                 "Timestamp", "Target_W", "Final_W", "P_GAIN", "D_GAIN", "MAX_TILT_STEP", 
                 "STOP_THRESHOLD", "Overshoot(g)", "Rise_Time", "Settling_Time", "SS_Error(g)", 
                 "Material", "Error_Rate(%)", "P_D_Ratio", "Avg_Pouring_Rate(g/s)", "Cycle_Time", "Overhead_Time"
-            ]) # [추가] 신규 컬럼 헤더 반영
+            ]) 
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         writer.writerow([
-            timestamp, 
-            round(target_w, 2), 
-            round(final_w, 2), 
-            round(p_gain, 3), 
-            round(d_gain, 3), 
-            round(max_tilt_step, 2), 
-            round(stop_thresh, 2), 
-            round(overshoot, 2), 
-            round(rise_t, 2), 
-            round(set_t, 2), 
-            round(ss_err, 2),
-            tube_type, # [추가] Material 컬럼에 시험관 종류 할당
-            round(error_rate, 2), # [추가]
-            round(p_d_ratio, 2), # [추가]
-            round(avg_pouring_rate, 2), # [추가]
-            round(cycle_time, 2), # [추가]
-            round(overhead_time, 2) # [추가]
+            timestamp, round(target_w, 2), round(final_w, 2), round(p_gain, 3), round(d_gain, 3), 
+            round(max_tilt_step, 2), round(stop_thresh, 2), round(overshoot, 2), round(rise_t, 2), 
+            round(set_t, 2), round(ss_err, 2), tube_type, round(error_rate, 2), round(p_d_ratio, 2), 
+            round(avg_pouring_rate, 2), round(cycle_time, 2), round(overhead_time, 2)
         ])
-
 
 # ==========================================
 # 2. 통신 전담 노드 (서비스 & 토픽)
@@ -135,8 +119,11 @@ class TaskPouring(Node):
 
         self.callback_group = ReentrantCallbackGroup()
         self.current_weight = 0.0
+        self.total_count = 0
+        self.success_count = 0
 
-        # 서비스 서버
+        self.pub_status = self.create_publisher(SystemStatus, "system_status", 10, callback_group=self.callback_group)
+
         self.srv_pouring = self.create_service(
             RobotCommand,
             "execute_pouring",
@@ -144,7 +131,6 @@ class TaskPouring(Node):
             callback_group=self.callback_group,
         )
 
-        # 무게 구독
         self.sub_weight = self.create_subscription(
             Float32,
             "load_cell/weight",
@@ -153,7 +139,6 @@ class TaskPouring(Node):
             callback_group=self.callback_group,
         )
 
-        # STOP 토픽 구독 (/dsr01/stop)
         self.sub_stop = self.create_subscription(
             String,
             "stop",
@@ -161,6 +146,34 @@ class TaskPouring(Node):
             10,
             callback_group=self.callback_group,
         )
+
+    def publish_system_status(self, phase="Ready", tcp_vel=0.0, tcp_acc=0.0, pour_speed=0.0, 
+                             p=0.0, d=0.0, overshoot=0.0, rise=0.0, settle=0.0, 
+                             err_rate=0.0, cycle_t=0.0, max_step=0.0, stop_th=0.0):
+        msg = SystemStatus()
+        msg.phase = phase
+        msg.tcp_vel = float(tcp_vel)
+        msg.tcp_acc = float(tcp_acc)
+        msg.pour_speed = float(pour_speed)
+        
+        msg.total_count = self.total_count
+        msg.success_count = self.success_count
+        msg.error_rate = float(err_rate)
+        msg.last_cycle_time = float(cycle_t)
+        
+        msg.p_gain = float(p)
+        msg.d_gain = float(d)
+        msg.overshoot = float(overshoot)
+        msg.rise_time = float(rise)
+        msg.settling_time = float(settle)
+        
+        try:
+            msg.max_tilt_step = float(max_step)
+            msg.stop_threshold = float(stop_th)
+        except AttributeError:
+            pass 
+
+        self.pub_status.publish(msg)
 
     def stop_callback(self, msg: String):
         global STOP_REQUESTED
@@ -171,13 +184,18 @@ class TaskPouring(Node):
         self.get_logger().warn("[WARN] STOP received -> will return to ready pose then finish")
 
     def execute_pouring_callback(self, request, response):
-        # [수정] 배열 형태로 전달된 targets 및 target_weights에서 값 추출
         target_w = request.target_weights[0] if request.target_weights else 0.0
-        tube_type = request.targets[0].strip().upper() if request.targets else "LARGE" # [추가] 시험관 종류 추출
+        tube_type = request.targets[0].strip().upper() if request.targets else "LARGE" 
         
         self.get_logger().info(f"[Service] Request Received. Tube: {tube_type}, Target: {target_w}g")
 
-        success = perform_task(self, float(target_w), tube_type) # [수정] 시험관 종류 파라미터 추가 전달
+        self.total_count += 1
+        self.publish_system_status(phase="Pouring", p=TUBE_TUNING.get(tube_type, {}).get("P_GAIN", 0.0))
+
+        success = perform_task(self, float(target_w), tube_type)
+
+        if success:
+            self.success_count += 1 
 
         response.success = bool(success)
         response.message = "Pouring Completed" if success else "Pouring Failed"
@@ -187,53 +205,51 @@ class TaskPouring(Node):
         self.current_weight = float(msg.data)
 
 # ==========================================
-# 3. 로봇 제어 로직 (DSR 라이브러리 사용)
+# 3. 로봇 제어 로직
 # ==========================================
 def initialize_robot():
     from DSR_ROBOT2 import (set_tool, set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS,)
-    from DSR_ROBOT2 import add_tcp # [추가] 새로운 TCP 등록을 위한 함수 임포트
+    from DSR_ROBOT2 import add_tcp
 
-    time.sleep(3.0)  # 노드 연결 대기(안전)
+    time.sleep(3.0) 
     try:
         print("[Thread] Initializing Robot settings...")
         set_robot_mode(ROBOT_MODE_MANUAL)
         set_tool(ROBOT_TOOL)
         set_tcp(ROBOT_TCP)
 
-        add_tcp(NEW_TCP_NAME, NEW_TCP_OFFSET) # [추가] 신규 TCP 정의
-        set_tcp(NEW_TCP_NAME) # [추가] 정의된 신규 TCP로 변경
+        add_tcp(NEW_TCP_NAME, NEW_TCP_OFFSET) 
+        set_tcp(NEW_TCP_NAME) 
 
-        add_tcp(FINGER_TCP_NAME, FINGER_TCP_OFFSET) # [추가] 집게 끝단 TCP 정의
-        set_tcp(FINGER_TCP_NAME) # [추가] 회전 중심을 집게 끝단으로 변경
+        add_tcp(FINGER_TCP_NAME, FINGER_TCP_OFFSET) 
+        set_tcp(FINGER_TCP_NAME) 
 
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
         print(f" [Thread] Robot Initialized: {ROBOT_ID}")
     except Exception as e:
         print(f" [Thread] Init Failed: {e}")
 
-
-def calculate_tilt_angle_pd(current_w: float, target_w: float, p_gain: float, d_gain: float, max_tilt_step: float): # [추가] 순수 PD 제어기
+def calculate_tilt_angle_pd(current_w: float, target_w: float, p_gain: float, d_gain: float, max_tilt_step: float): 
     global prev_error
     
-    error = target_w - current_w # [추가]
-    
-    # [추가] PD 제어 계산 (단일 P_GAIN 유지)
+    error = target_w - current_w 
     p_term = error * p_gain
     d_term = (error - prev_error) * d_gain
-    prev_error = error # [추가] 현재 오차를 다음 사이클을 위해 저장
+    prev_error = error 
     
-    delta_angle = p_term + d_term # [추가]
+    delta_angle = p_term + d_term 
     
-    if delta_angle > max_tilt_step: # [추가] 동적으로 전달받은 max_tilt_step 적용
+    if delta_angle > max_tilt_step: 
         delta_angle = max_tilt_step 
     elif delta_angle < -max_tilt_step: 
         delta_angle = -max_tilt_step
 
-    return float(delta_angle), float(error) # [추가]
+    return float(delta_angle), float(error) 
 
 def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARGE") -> bool:
-    from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait
-    from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
+    # [수정] DSR_ROBOT2 모듈에서 실시간 속도 확인용 get_current_velx, get_current_velj 추가 임포트
+    from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait, get_current_velx, get_current_velj
+    from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS 
     
     set_robot_mode(ROBOT_MODE_MANUAL)
     set_tcp(ROBOT_TCP)
@@ -241,15 +257,12 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     time.sleep(0.5)
 
     global STOP_REQUESTED
-    global P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD # [추가] 전역 변수 선언
     global prev_error
 
-    # [추가] 정의되지 않은 시험관 입력 시 예외 처리 및 작업 중단
     if tube_type not in TUBE_TUNING:
         print(f"[ERROR] Invalid tube type: {tube_type}")
         return False
 
-    # [추가] 타겟 종류에 맞는 튜닝 파라미터 설정
     tuning = TUBE_TUNING[tube_type]
     active_p_gain = tuning["P_GAIN"]
     active_d_gain = tuning["D_GAIN"]
@@ -258,43 +271,43 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
 
     print(f"[SYSTEM] Task Start! Target: {target_weight}g | Tube: {tube_type} | Threshold: {active_stop_thresh}g")
 
-    start_t = time.time() # [추가] 시작 시간 기록
-    log_t = [] # [추가] 경과 시간 로깅 리스트
-    log_w = [] # [추가] 현재 무게 로깅 리스트
-    log_d = [] # [추가] 제어 입력(delta) 로깅 리스트
+    start_t = time.time() 
+    log_t = [] 
+    log_w = [] 
+    log_d = [] 
 
     if tube_type == "LARGE":
         pour_ready_pos = posx(585.440, 157.760, 160.631, 91.920, 97.360, 88.550)
-    else: # "SMALL1", "SMALL2"
+    else: 
         pour_ready_pos = posx(585.440, 144.760, 160.631, 91.920, 97.360, 88.550)
 
-    # 시작 자세로 이동
     try:
         movel(pour_ready_pos, vel=100, acc=100)
         wait(1.0)
 
-        set_robot_mode(ROBOT_MODE_MANUAL) # [추가]
-        set_tcp(FINGER_TCP_NAME) # [추가]
-        set_robot_mode(ROBOT_MODE_AUTONOMOUS) # [추가]
+        set_robot_mode(ROBOT_MODE_MANUAL) 
+        set_tcp(FINGER_TCP_NAME) 
+        set_robot_mode(ROBOT_MODE_AUTONOMOUS) 
         time.sleep(0.5)
 
-        # [추가] 작은 시험관일 경우 초기 80도 급속 틸팅 수행
         if tube_type in ["SMALL1", "SMALL2"]:
-            print(f"[SYSTEM] Initial 80 deg fast tilt for {tube_type}") # [추가] 상태 출력
-            init_tilt_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, 85.0) # [추가] 툴 Z축 기준 80도 회전
-            movel(init_tilt_pos, vel=60, acc=80, ref=1, mod=1) # [추가] 툴 좌표계 기준 상대 이동
-            wait(0.5) # [추가] 안정화 대기
+            print(f"[SYSTEM] Initial 80 deg fast tilt for {tube_type}") 
+            init_tilt_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, 85.0) 
+            movel(init_tilt_pos, vel=60, acc=80, ref=1, mod=1) 
+            wait(0.5) 
 
     except Exception as e:
         print(f"[ERROR] Move Failed: {e}")
         return False
 
-    # stop_target = target_weight - STOP_THRESHOLD
     stop_target = target_weight - active_stop_thresh
     prev_error = target_weight - float(node.current_weight)
 
+    # [추가] 가속도 미분 계산을 위한 이전 값 기록 변수
+    prev_tcp_vel = 0.0
+    prev_time = time.time()
+
     while rclpy.ok():
-        # STOP 들어오면: 자세 복귀 후 종료(노드 유지)
         if STOP_REQUESTED:
             try:
                 movel(pour_ready_pos, vel=150, acc=150)
@@ -306,15 +319,45 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
 
             print(" [STOP] Returned to ready pose. Finishing task.")
             STOP_REQUESTED = False
-            return True  # STOP을 '정상 종료'로 볼지 여부(원하면 False로)
+            return True  
 
         current_weight = float(node.current_weight)
 
-        cur_t = time.time() - start_t # [추가] 현재 경과 시간 계산
-        log_t.append(cur_t) # [추가] 시간 로깅
-        log_w.append(current_weight) # [추가] 무게 로깅
+        cur_t = time.time() - start_t 
+        log_t.append(cur_t) 
+        log_w.append(current_weight) 
 
-        # 목표 근처 도달하면 복귀 자세로 이동 후 종료
+        # ----------------------------------------------------
+        # [추가] 실시간 TCP 속도, 붓기 속도, 가속도 수집 및 연산
+        # ----------------------------------------------------
+        current_time = time.time()
+        dt = current_time - prev_time
+        
+        try:
+            # get_current_velx() 반환: [vx, vy, vz, rx, ry, rz]
+            velx = get_current_velx()
+            # 벡터의 크기(속력) 계산 (단위: mm/s)
+            actual_tcp_vel = math.sqrt(velx[0]**2 + velx[1]**2 + velx[2]**2)
+            
+            # get_current_velj() 반환: 관절 1~6의 속도 (단위: deg/s)
+            velj = get_current_velj()
+            actual_pour_speed = abs(velj[5]) # 6번 관절 속도
+        except Exception as e:
+            # API 연결 지연이나 시뮬레이션 환경 대비용 폴백
+            actual_tcp_vel = 0.0
+            actual_pour_speed = 0.0
+            
+        # 가속도 계산 (dv/dt)
+        if dt > 0:
+            actual_tcp_acc = (actual_tcp_vel - prev_tcp_vel) / dt
+        else:
+            actual_tcp_acc = 0.0
+            
+        # 다음 루프를 위해 이전 값 업데이트
+        prev_tcp_vel = actual_tcp_vel
+        prev_time = current_time
+        # ----------------------------------------------------
+
         if current_weight >= stop_target:
             try:
                 movel(pour_ready_pos, vel=150, acc=150)
@@ -325,26 +368,30 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
             
             time.sleep(3.0)
             final_settled_weight = float(node.current_weight)
-
             actual_cycle_time = time.time() - start_t
             
-            # [수정] 동적 파라미터 로깅 함수로 전달
-            calc_metrics(log_t, log_w, target_weight, final_settled_weight, 
+            calc_metrics(node, log_t, log_w, target_weight, final_settled_weight, 
                          active_p_gain, active_d_gain, active_max_tilt_step, active_stop_thresh, 
                          tube_type, actual_cycle_time)            
             print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
-        #delta, error = calculate_tilt_angle(current_weight, target_weight)
-        delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step) # [추가] 순수 PD 제어 함수로 변경
+        delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step) 
+        log_d.append(delta) 
 
-        log_d.append(delta) # [추가] 제어 입력 로깅
+        # [수정] 직접 구한 API 센서 기반의 tcp_vel, tcp_acc, pour_speed를 UI로 쏨!
+        node.publish_system_status(
+            phase="Pouring", 
+            tcp_vel=actual_tcp_vel, 
+            tcp_acc=actual_tcp_acc, 
+            pour_speed=actual_pour_speed,
+            p=active_p_gain, d=active_d_gain, max_step=active_max_tilt_step, stop_th=active_stop_thresh
+        )
 
         try:
-            rel_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, delta) # [추가] 툴 좌표계 기준 Z축 회전량(delta) 설정
-            movel(rel_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1) # [추가] ref=1(툴 좌표계), mod=1(상대 이동) 적용하여 직교 제어
-
-            print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f}")
+            rel_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, delta) 
+            movel(rel_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1) 
+            print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f} | Vel: {actual_tcp_vel:.1f}")
 
         except Exception as e:
             print(f"[ERROR] Tilt Move Failed: {e}")
@@ -353,15 +400,12 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     return False
 
 # ==========================================
-# 4. 메인 (노드 분리 전략 적용)
+# 4. 메인
 # ==========================================
 def main(args=None):
     rclpy.init(args=args)
 
-    # 1) 로봇 제어용 노드 (DSR이 독점)
     robot_node = rclpy.create_node("dsr_bridge_hidden", namespace=ROBOT_ID)
-
-    # 2) 통신용 노드 (서비스/무게/STOP)
     task_node = TaskPouring()
 
     DR_init.__dsr__id = ROBOT_ID
