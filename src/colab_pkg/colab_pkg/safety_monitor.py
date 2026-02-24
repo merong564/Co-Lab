@@ -3,6 +3,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
+
 from std_msgs.msg import String
 import DR_init
 
@@ -18,7 +19,7 @@ DR_init.__dsr__model = ROBOT_MODEL
 
 class SafetyMonitor(Node):
     """
-    - /dsr01/safety/shock (std_msgs/String) 발행
+    - /dsr01/safety/impact (std_msgs/String) 발행
     - 예: "IMPACT_DF:23.40 MAG:51.20"
     """
     def __init__(self):
@@ -28,24 +29,29 @@ class SafetyMonitor(Node):
         self.get_tool_force = get_tool_force
         self.DR_TOOL = DR_TOOL
 
-        self.pub_shock = self.create_publisher(String, 'safety/shock', 10)
+        # ✅ 토픽명 변경
+        self.pub_impact = self.create_publisher(String, 'safety/impact', 10)
 
-        # ===== 튜닝 =====
+        # ===== 튜닝(꼭 필요한 것만 + 주석) =====
         self.HZ = 20.0
-        self.DF_THRESHOLD = 25.0    # ΔF 임계값 (현장 튜닝)
-        self.COOLDOWN_SEC = 1.0     # 연속 발행 방지
-        self.WARMUP_FRAMES = 8      # 시작 안정화 프레임
+        # 충격 기준: 힘 크기(mag)의 프레임 간 변화량 |mag - prev_mag| 가 이 값 이상이면 충격 후보
+        self.DF_THRESHOLD = 25.0
+        # 연속 발행 방지(초)
+        self.COOLDOWN_SEC = 1.0
+        # 시작 직후 흔들림 무시(프레임)
+        self.WARMUP_FRAMES = 8
 
         self.prev_mag = None
         self.last_fire_ts = 0.0
         self.warmup_cnt = 0
 
-        self.timer = self.create_timer(1.0 / self.HZ, self.loop)
-        self.get_logger().info("SafetyMonitor Ready. Topic: /dsr01/safety/shock")
+        # ✅ loop -> perform_task
+        self.timer = self.create_timer(1.0 / self.HZ, self.perform_task)
+        self.get_logger().info("SafetyMonitor Ready. Topic: /dsr01/safety/impact")
 
-    def loop(self):
+    def perform_task(self):
         try:
-            f = self.get_tool_force(self.DR_TOOL)  # 보통 [Fx,Fy,Fz,Mx,My,Mz]
+            f = self.get_tool_force(self.DR_TOOL)  # [Fx,Fy,Fz,Mx,My,Mz]
             fx, fy, fz = float(f[0]), float(f[1]), float(f[2])
         except Exception as e:
             self.get_logger().warn(f"get_tool_force failed: {e}")
@@ -70,8 +76,8 @@ class SafetyMonitor(Node):
             self.last_fire_ts = now
             msg = String()
             msg.data = f"IMPACT_DF:{df:.2f} MAG:{mag:.2f}"
-            self.pub_shock.publish(msg)
-            self.get_logger().error(f"[SHOCK] {msg.data}")
+            self.pub_impact.publish(msg)
+            self.get_logger().error(f"[IMPACT] {msg.data}")
 
 
 def main(args=None):
