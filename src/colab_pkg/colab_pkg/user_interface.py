@@ -4,7 +4,7 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260223_v01 (Simplified End-to-End Testing)
+[Version] 260224_v01 (Simplified End-to-End Testing)
 """
 
 import rclpy
@@ -14,6 +14,7 @@ from firebase_admin import credentials, db
 import time
 import datetime
 import re  
+import math
 
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32, String
@@ -21,6 +22,7 @@ from std_msgs.msg import Float32, String
 try:
     from colab_interfaces.srv import RobotCommand
     from colab_interfaces.msg import SystemStatus
+    from colab_interfaces.msg import ControlMetrics  # [추가 1] 새로운 제어 지표 메시지 임포트
     IMPORT_SUCCESS = True
 except ImportError:
     print("❌ [Error] colab_interfaces 패키지를 찾을 수 없습니다. source install/setup.bash를 확인하세요.")
@@ -50,6 +52,9 @@ class UserInterface(Node):
             self.create_subscription(JointState, 'dsr01/joint_states', self.joint_callback, 10)
             self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10)
             self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10)
+            
+            # [추가 2] 제어 성능 지표 전용 토픽 구독 생성
+            self.create_subscription(ControlMetrics, 'log_control_metrics', self.control_metrics_callback, 10)
         
         self.timer = self.create_timer(0.1, self.loop_callback)
         self.last_command_timestamp = time.time() * 1000 
@@ -155,9 +160,6 @@ class UserInterface(Node):
 
         self.latest_system_status = {
             "phase": msg.phase,
-            "tcp_vel": msg.tcp_vel,
-            "tcp_acc": msg.tcp_acc,
-            "pour_speed": msg.pour_speed,
             "total_count": msg.total_count,
             "success_count": msg.success_count,
             "error_rate": round(msg.error_rate, 2),
@@ -191,8 +193,47 @@ class UserInterface(Node):
         except Exception as e:
             self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
 
+    # [추가 3] ControlMetrics 데이터를 수신하여 DB에만 별도로 저장하는 콜백 함수
+    def control_metrics_callback(self, msg):
+        try:
+            metrics_data = {
+                'timestamp': int(time.time() * 1000),
+                'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'p_gain': round(msg.p_gain, 4),
+                'd_gain': round(msg.d_gain, 4),
+                'max_tilt_step': round(msg.max_tilt_step, 2),
+                'stop_threshold': round(msg.stop_threshold, 2),
+                'p_d_ratio': round(msg.p_d_ratio, 2) if hasattr(msg, 'p_d_ratio') else 0.0,
+                'overshoot': round(msg.overshoot, 2),
+                'rise_time': round(msg.rise_time, 2),
+                'settling_time': round(msg.settling_time, 2),
+                'ss_error': round(msg.ss_error, 2)
+            }
+            
+            db_ref = db.reference('control_metrics_history')
+            new_record = db_ref.push(metrics_data)
+            
+            self.get_logger().info(f"📊 [제어 지표 DB 저장 완료] ID: {new_record.key}")
+
+            # UI 화면에 튜닝값을 띄워주기 위해 최신 시스템 상태 딕셔너리에도 업데이트
+            self.latest_system_status['max_tilt_step'] = round(msg.max_tilt_step, 2)
+            self.latest_system_status['stop_threshold'] = round(msg.stop_threshold, 2)
+
+        except Exception as e:
+            self.get_logger().error(f"❌ DB 제어 지표 저장 실패: {e}")
+
     def joint_callback(self, msg): 
-        pass
+        # 1. 관절 각도 저장
+        self.latest_joints = [math.degrees(rad) for rad in msg.position]
+        self.last_joint_time = time.time()
+        
+        # 2. [추가] joint_states의 velocity 배열에서 J6 속도 추출 (pour_speed)
+        if hasattr(msg, 'velocity') and len(msg.velocity) >= 6:
+            j6_vel_rad = msg.velocity[5] # 6번째 관절의 속도 (rad/s)
+            pour_speed_deg = math.degrees(j6_vel_rad) # deg/s로 변환
+            
+            # UI에 띄우기 위해 시스템 상태 딕셔너리에 즉시 업데이트
+            self.latest_system_status['pour_speed'] = round(abs(pour_speed_deg), 1)
         
     def weight_callback(self, msg): 
         self.latest_weight = msg.data
