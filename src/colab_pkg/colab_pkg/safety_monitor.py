@@ -19,7 +19,7 @@ DR_init.__dsr__model = ROBOT_MODEL
 
 class SafetyMonitor(Node):
     """
-    - /dsr01/safety/impact (std_msgs/String) 발행
+    - /dsr01/stop/impact (std_msgs/String) 발행
     - 예: "IMPACT_DF:23.40 MAG:51.20"
     """
     def __init__(self):
@@ -30,7 +30,7 @@ class SafetyMonitor(Node):
         self.DR_TOOL = DR_TOOL
 
         # ✅ 토픽명 변경
-        self.pub_impact = self.create_publisher(String, 'safety/impact', 10)
+        self.pub_impact = self.create_publisher(String, 'stop/impact', 10)
 
         # ===== 튜닝(꼭 필요한 것만 + 주석) =====
         self.HZ = 20.0
@@ -47,7 +47,7 @@ class SafetyMonitor(Node):
 
         # ✅ loop -> perform_task
         self.timer = self.create_timer(1.0 / self.HZ, self.perform_task)
-        self.get_logger().info("SafetyMonitor Ready. Topic: /dsr01/safety/impact")
+        self.get_logger().info("SafetyMonitor Ready. Topic: /dsr01/stop/impact")
 
     def perform_task(self):
         try:
