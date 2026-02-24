@@ -4,7 +4,6 @@ import rclpy
 from rclpy.node import Node
 import DR_init
 
-# 멀티스레딩 및 서비스/토픽 관련
 import threading
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -27,18 +26,20 @@ DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
 # ===============================
-# STOP 처리 (노드 죽이지 않기)
+# STOP 처리
+#  - STOP 받으면 언제든 중단
+#  - 중단되면 서비스 응답 success=False
+#  - STOP 플래그는 RESET에서만 해제 (서비스 시작에서 지우지 않음)
 # ===============================
-STOP_REQUESTED = False  # STOP 플래그
+STOP_REQUESTED = False
 
 
 class TaskTransfer(Node):
     def __init__(self):
         super().__init__('task_transfer', namespace=ROBOT_ID)
-
         self.callback_group = ReentrantCallbackGroup()
 
-        # STOP 토픽 구독 (/dsr01/stop)
+        # /dsr01/stop 구독
         self.sub_stop = self.create_subscription(
             String,
             'stop',
@@ -47,55 +48,54 @@ class TaskTransfer(Node):
             callback_group=self.callback_group
         )
 
-        # 서비스 서버 (/dsr01/execute_transfer)
+        # /dsr01/execute_transfer 서비스
         self.srv_transfer = self.create_service(
             RobotCommand,
             'execute_transfer',
             self.execute_transfer_callback,
             callback_group=self.callback_group
         )
+
         self.get_logger().info("TaskTransfer Ready. Service: execute_transfer")
 
     def stop_callback(self, msg: String):
-        """
-        /dsr01/stop 토픽:
-          - "STOP"  : 작업 중단 플래그 + (가능하면) 로봇 즉시 정지 시도
-          - "RESET" : STOP 플래그 해제
-        """
         global STOP_REQUESTED
         cmd = (msg.data or "").strip().upper()
 
         if cmd == "STOP":
             STOP_REQUESTED = True
-            self.get_logger().warn("[WARN] STOP received -> stop flag set (node stays alive)")
+            self.get_logger().warn("[STOP] received -> flag set (node stays alive)")
 
-            # 가능한 경우, 즉시 모션 정지 시도 (환경/버전에 따라 함수명이 다를 수 있어서 안전하게 try)
+            # 가능하면 즉시 모션 정지 시도
             try:
                 from DSR_ROBOT2 import stop, DR_QSTOP
                 stop(DR_QSTOP)
-                self.get_logger().warn("[WARN] Robot stop() called (DR_QSTOP)")
+                self.get_logger().warn("[STOP] Robot stop() called (DR_QSTOP)")
             except Exception:
                 try:
                     from DSR_ROBOT2 import stop, DR_SSTOP
                     stop(DR_SSTOP)
-                    self.get_logger().warn("[WARN] Robot stop() called (DR_SSTOP)")
+                    self.get_logger().warn("[STOP] Robot stop() called (DR_SSTOP)")
                 except Exception:
-                    # stop 함수가 없거나 사용 불가해도 노드는 유지
                     pass
 
         elif cmd == "RESET":
             STOP_REQUESTED = False
-            self.get_logger().info("[INFO] RESET received -> stop flag cleared")
+            self.get_logger().info("[RESET] received -> flag cleared")
 
     def execute_transfer_callback(self, request, response):
         global STOP_REQUESTED
 
-        # 작업 시작 시 STOP 플래그 초기화(원하면 주석 처리 가능)
-        STOP_REQUESTED = False
+        # ✅ 서비스 시작 시 STOP이면 즉시 실패 응답 (플래그 지우지 않음)
+        if STOP_REQUESTED:
+            self.get_logger().info(f"##### Service Response = False ######")
+
+            response.success = False
+            response.message = "STOP already requested"
+            return response
 
         mode = (getattr(request, "mode", "") or "").strip().upper()
 
-        # request.targets[0] 기반
         targets_list = getattr(request, "targets", ["LARGE"])
         tube_type = targets_list[0].strip().upper() if targets_list else "LARGE"
 
@@ -103,6 +103,11 @@ class TaskTransfer(Node):
 
         try:
             perform_task(mode, tube_type)
+
+            # ✅ 작업이 정상 종료된 것처럼 보이더라도 STOP이 들어왔으면 실패 처리
+            if STOP_REQUESTED:
+                raise RuntimeError("STOP requested during task")
+
             response.success = True
             response.message = f"{mode} Completed"
         except Exception as e:
@@ -166,9 +171,57 @@ def initialize_robot():
 
 
 def perform_task(mode, tube_type):
+    """
+    STOP 처리 보장:
+      - 시작 시 STOP이면 즉시 중단
+      - 작업 진행 중에도 _check_stop()로 계속 감지
+      - STOP이면 RuntimeError -> 서비스 콜백에서 success=False 응답
+    """
     global STOP_REQUESTED
-    from DSR_ROBOT2 import movej, movel, posx, wait, set_digital_output, DR_BASE
+
+    # [추가] amovel, amovej, check_motion 임포트
+    from DSR_ROBOT2 import movej, movel, amovel, amovej, check_motion, posx, wait, set_digital_output, DR_BASE
     from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS
+
+    def _check_stop(tag=""):
+        global STOP_REQUESTED
+        if STOP_REQUESTED:
+            # 가능한 경우, 추가 정지 시도
+            try:
+                from DSR_ROBOT2 import stop, DR_QSTOP
+                stop(DR_QSTOP)
+            except Exception:
+                pass
+            raise RuntimeError(f"STOP at: {tag}")
+
+    # ✅ 시작하자마자 STOP이면 바로 중단
+    _check_stop("before task start")
+
+    # [추가] 모션 및 대기 중 STOP 플래그를 실시간으로 감시하는 커스텀 함수 정의
+    def custom_movel(*args, **kwargs):
+        amovel(*args, **kwargs)
+        time.sleep(0.1) # 모션 시작 대기
+        while check_motion() == 1:
+            _check_stop("during movel")
+            time.sleep(0.05)
+
+    def custom_movej(*args, **kwargs):
+        amovej(*args, **kwargs)
+        time.sleep(0.1) # 모션 시작 대기
+        while check_motion() == 1:
+            _check_stop("during movej")
+            time.sleep(0.05)
+
+    def custom_wait(wait_time):
+        start = time.time()
+        while time.time() - start < wait_time:
+            _check_stop("during wait")
+            time.sleep(0.05)
+
+    # [추가] 기존 블로킹 함수들을 커스텀 함수로 덮어씌움
+    movel = custom_movel
+    movej = custom_movej
+    wait = custom_wait
 
     set_robot_mode(ROBOT_MODE_MANUAL)
     set_tcp(ROBOT_TCP)
@@ -178,17 +231,6 @@ def perform_task(mode, tube_type):
     POSES = get_poses(posx)
     J_READY = [0, 0, 90, 0, 90, 0]
     ON, OFF = 1, 0
-
-    def _check_stop(tag=""):
-        global STOP_REQUESTED
-        if STOP_REQUESTED:
-            # 작업 중단 시도 + 가능한 경우 로봇 정지(추가 안전)
-            try:
-                from DSR_ROBOT2 import stop, DR_QSTOP
-                stop(DR_QSTOP)
-            except Exception:
-                pass
-            raise RuntimeError(f"STOP at: {tag}")
 
     def gripper_open():
         set_digital_output(2, ON)
@@ -215,35 +257,29 @@ def perform_task(mode, tube_type):
 
     def _pickup_tube_common(P):
         _check_stop("before movej ready")
-        movej(J_READY, vel=VEL, acc=ACC)
+        custom_movej(J_READY, vel=VEL, acc=ACC)
         wait(0.5)
 
         _check_stop("before target_gripper_open")
         target_gripper_open()
 
         _check_stop("before movel PICK_UP")
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before movel PICK_DOWN")
-        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before gripper_close")
         gripper_close()
 
         _check_stop("before movel PICK_UP(2)")
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before movel POUR_UP")
-        movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before movel POUR_READY")
-        movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-    def pickup_large(P):
-        _pickup_tube_common(P)
-
-    def pickup_small(P):
-        _pickup_tube_common(P)
+        custom_movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
 
     def pickup_beaker(P):
         _check_stop("before movej ready")
@@ -343,7 +379,7 @@ def perform_task(mode, tube_type):
         _check_stop("before movej ready")
         movej(J_READY, vel=VEL, acc=ACC)
 
-    # --- 실제 실행 ---
+    # 실행
     if tube_type not in POSES:
         raise RuntimeError(f"Unknown tube_type: {tube_type} (valid: {list(POSES.keys())})")
 
@@ -351,12 +387,10 @@ def perform_task(mode, tube_type):
 
     if mode == "PICKUP":
         print(f"[Action] PICKUP Start ({tube_type})")
-        if tube_type == "LARGE":
-            pickup_large(P)
-        elif tube_type in ["SMALL1", "SMALL2"]:
-            pickup_small(P)
-        elif tube_type == "BEAKER":
+        if tube_type == "BEAKER":
             pickup_beaker(P)
+        else:
+            _pickup_tube_common(P)
         print("[Action] PICKUP Done")
 
     elif mode == "RETURN":
