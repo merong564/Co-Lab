@@ -255,16 +255,16 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     log_w = [] # [추가] 현재 무게 로깅 리스트
     log_d = [] # [추가] 제어 입력(delta) 로깅 리스트
 
+    # [추가] 초기 무게 감지 플래그 추가
+    weight_detected = False
+
     is_dribble_mode = False # [추가] 미세 제어 1회 진입 확인용 플래그
     
-    # [수정] 진입점은 기존 튜닝된 STOP_THRESHOLD를 활용하여 설정 (음수 방지)
-    dribble_start_weight = max(0.0, target_weight - active_stop_thresh)
-
     # [수정] 최종 정지 목표치는 처음부터 미세 제어용 임계값(2.0g)을 적용하여 설정
-    DRIBBLE_STOP_THRESH = 2.0
+    DRIBBLE_STOP_THRESH = 0.5
     stop_target = target_weight - DRIBBLE_STOP_THRESH
 
-    print(f"[SYSTEM] Task Start! Target: {target_weight}g | Tube: {tube_type} | Dribble Start: {dribble_start_weight}g | Final Stop: {stop_target}g")
+    print(f"[SYSTEM] Task Start! Target: {target_weight}g | Tube: {tube_type} | Final Stop: {stop_target}g")
 
     if tube_type == "LARGE":
         pour_ready_pos = posx(585.440, 157.760, 160.631, 91.920, 97.360, 88.550)
@@ -273,7 +273,8 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
 
     # 시작 자세로 이동
     try:
-        movel(pour_ready_pos, vel=100, acc=100)
+        # [수정] 액체 출렁임 방지를 위해 이동 속도 하향 (vel=50, acc=50)
+        movel(pour_ready_pos, vel=50, acc=50)
         wait(1.0)
 
         set_robot_mode(ROBOT_MODE_MANUAL) # [추가]
@@ -281,13 +282,6 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         time.sleep(0.5) # [수정] 제어기 TCP 변경 적용 대기
         set_robot_mode(ROBOT_MODE_AUTONOMOUS) # [추가]
         time.sleep(0.5) # [수정] 모드 전환 완료 대기
-
-        # [추가] 작은 시험관일 경우 초기 80도 급속 틸팅 수행
-        if tube_type in ["SMALL1", "SMALL2"]:
-            print(f"[SYSTEM] Initial 80 deg fast tilt for {tube_type}") # [추가] 상태 출력
-            init_tilt_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, 85.0) # [추가] 툴 Z축 기준 80도 회전
-            movel(init_tilt_pos, vel=60, acc=80, ref=1, mod=1) # [추가] 툴 좌표계 기준 상대 이동
-            wait(0.5) # [추가] 안정화 대기
 
     except Exception as e:
         print(f"[ERROR] Move Failed: {e}")
@@ -316,29 +310,11 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         log_t.append(cur_t) # [추가] 시간 로깅
         log_w.append(current_weight) # [추가] 무게 로깅
 
-        # [수정] 동적 2단 제어 (Bulk & Dribble) 진입 로직
-        if current_weight >= dribble_start_weight and not is_dribble_mode:
-            is_dribble_mode = True # [추가] 진입 플래그 활성화
-            
-            # [수정] 미세 제어 구간 파라미터 대폭 변경 (진동 및 Pecking 효과 유도)
-            active_p_gain = 0.025 # 응답성 확보
-            active_d_gain = 0.3   # 강한 제동력으로 떨림(Shake) 효과 유도
-            active_max_tilt_step = 0.15 # 틸팅 스텝 하향
-            
-            # [수정] 유량 강제 차단을 위한 Tilt-back 각도 및 대기 시간 대폭 축소
-            try:
-                print("[SYSTEM] Switch to Dribble Mode: Executing Tilt-back -1.5 deg")
-                tilt_back_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, -1.5)
-                movel(tilt_back_pos, vel=80, acc=100, ref=1, mod=1)
-                wait(0.2) 
-            except Exception as e:
-                print(f"[ERROR] Tilt-back Move Failed: {e}")
-                return False
-
         # 목표 근처 도달하면 복귀 자세로 이동 후 종료
         if current_weight >= stop_target:
             try:
-                movel(pour_ready_pos, vel=150, acc=150)
+                # [수정] 복귀 시에도 액체 출렁임 방지를 위해 약간 하향
+                movel(pour_ready_pos, vel=100, acc=100)
                 wait(1.0)
             except Exception as e:
                 print(f"[ERROR] Return Move Failed: {e}")
@@ -356,8 +332,29 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
             print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
-        delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step) # [추가] 순수 PD 제어 함수로 변경
-
+        # [수정] 무게 감지 전 고정 틸팅 (2.0도), 감지 후 Tilt-back 및 PD 제어 전환 로직 적용
+        if not weight_detected:
+            if current_weight >= 1.0: # [수정] 노이즈 피크(0.43g)를 고려하여 감지 임계값을 1.0g으로 상향
+                weight_detected = True
+                print("[SYSTEM] Liquid detected. Executing initial Tilt-back to cut flow.")
+                
+                # [추가] 초기 하중 감지 시 2.0도 고속 하강의 관성을 끊기 위한 단발성 Tilt-back 로직
+                try:
+                    tilt_back_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, -1.0)
+                    movel(tilt_back_pos, vel=20, acc=20, ref=1, mod=1)
+                    wait(0.5) # 출렁임 안정화를 위해 대기
+                except Exception as e:
+                    print(f"[ERROR] Initial Tilt-back Move Failed: {e}")
+                    return False
+                
+                # [추가] 역방향 동작 이후 안정화된 무게를 반영하기 위해 이번 루프는 종료하고 새 사이클 시작
+                continue
+            else:
+                delta = 1.5 # [추가] 감지 전 초기 틸팅 각도를 2.0도로 고정하여 고속 하강
+                error = target_weight - current_weight
+        else:
+            delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step)
+            
         log_d.append(delta) # [추가] 제어 입력 로깅
 
         # [추가] 디버깅 모드일 경우 rqt_plot을 위한 데이터 퍼블리시
