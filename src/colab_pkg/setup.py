@@ -37,15 +37,15 @@ setup(
             'pour_small = colab_pkg.task_pouring_ctrl_small:main',    # 소량 Pouring 제어 노드 (테스트용)
             'mix_master = colab_pkg.mix_master:main',              # Mixing 단계 제어 노드 (테스트용)
             # 최종 테스트용 (모든 단계)
-            'ui = colab_pkg.user_interface:main',
-            'ctrl = colab_pkg.system_controller:main',
-            'pour = colab_pkg.task_pouring:main',
-            'scale = colab_pkg.scale_driver:main',
-            'transfer = colab_pkg.task_transfer:main',
-            'mixing = colab_pkg.task_mixing:main',            
-            'gripper_test = colab_pkg.gripper_test:main',
-            'safety_monitor = colab_pkg.safety_monitor:main',
-     	    'task_recovery  = colab_pkg.task_recovery:main',
+            'ui = colab_pkg.user_interface_ver2:main',
+            'ctrl = colab_pkg.system_controller_ver2:main',
+            'pour = colab_pkg.task_pouring_ver2:main',
+            'scale = colab_pkg.scale_driver_ver2:main',
+            'transfer = colab_pkg.task_transfer_ver2:main',
+            'mixing = colab_pkg.task_mixing_ver2:main',            
+            'gripper_test = colab_pkg.gripper_test_ver2:main',
+            'safety_monitor = colab_pkg.safety_monitor_ver2:main',
+     	    'task_recovery  = colab_pkg.task_recovery_ver2:main',
         ],
     },
 )
