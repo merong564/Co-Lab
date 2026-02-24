@@ -33,15 +33,15 @@ setup(
             'test_scale = colab_pkg.scale_driver_test:main',
             'test_cli = colab_pkg.test_cli_servers:main',
             'ctrl_nm = colab_pkg.system_controller_no_mixing:main',     # 혼합 단계 없는 컨트롤러 (테스트용)
-            'pour_ctrl = colab_pkg.task_pouring_ctrl:main',              # Pouring 단계 제어 노드 (테스트용)
+            'pour_ctrl = colab_pkg.task_pouring_ctrl_ver2:main',              # Pouring 단계 제어 노드 (테스트용)
             'pour_small = colab_pkg.task_pouring_ctrl_small:main',    # 소량 Pouring 제어 노드 (테스트용)
             'mix_master = colab_pkg.mix_master:main',              # Mixing 단계 제어 노드 (테스트용)
             # 최종 테스트용 (모든 단계)
             'ui = colab_pkg.user_interface:main',
             'ctrl = colab_pkg.system_controller:main',
             'pour = colab_pkg.task_pouring:main',
-            'scale = colab_pkg.scale_driver:main',
-            'transfer = colab_pkg.task_transfer:main',
+            'scale = colab_pkg.scale_driver_ver2:main',
+            'transfer = colab_pkg.task_transfer_ver2:main',
             'mixing = colab_pkg.task_mixing:main',            
             'gripper_test = colab_pkg.gripper_test:main',
             
