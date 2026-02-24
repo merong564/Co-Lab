@@ -193,7 +193,7 @@ class TaskPouring(Node):
 
         self.total_count += 1
         
-        # 💡 [Phase: Transfer] 이동 시작 단계 알림
+        # 💡 [Phase: Transfer] 서비스 받자마자 이동 시작 단계 알림
         self.publish_system_status(phase="Transfer", p=TUBE_TUNING.get(tube_type, {}).get("P_GAIN", 0.0))
 
         # 💡 [데드락 방지] 로봇 제어 로직을 별도 스레드에서 실행
@@ -341,17 +341,18 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         log_w.append(current_weight) 
 
         # ----------------------------------------------------
-        # 💡 [변수명 통일] .msg 규격에 맞춘 tcp_vel, tcp_acc, pour_speed 연산
+        # 💡 [변수명 통일] .msg 규격에 맞춘 tcp_vel, tcp_acc, pour_speed 실시간 센서값 추출
         # ----------------------------------------------------
         try:
-            velx = get_current_velx()
+            # 1. TCP 직교 속도 및 가속도
+            velx = get_current_velx() # [vx, vy, vz, rx, ry, rz]
             tcp_vel = math.sqrt(velx[0]**2 + velx[1]**2 + velx[2]**2)
-            
-            velj = get_current_velj()
-            pour_speed = abs(velj[5])
-            
             tcp_acc = (tcp_vel - prev_tcp_vel) / dt if dt > 0 else 0.0
-        except:
+            
+            # 2. 붓기 속도 (J6 관절 속도)
+            velj = get_current_velj() # [v1, v2, v3, v4, v5, v6]
+            pour_speed = abs(velj[5])
+        except Exception as e:
             tcp_vel, tcp_acc, pour_speed = 0.0, 0.0, 0.0
 
         prev_tcp_vel = tcp_vel
@@ -382,7 +383,7 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step) 
         log_d.append(delta) 
 
-        # 💡 [Phase: Pouring] 붓기 중 실시간 상태 발행
+        # 💡 [Phase: Pouring] 붓기 중 실시간 상태 발행 (.msg 필드명과 정확히 매칭)
         node.publish_system_status(
             phase="Pouring", 
             tcp_vel=tcp_vel, 
@@ -394,7 +395,7 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         try:
             rel_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, delta) 
             movel(rel_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1) 
-            print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f} | Vel: {tcp_vel:.1f}")
+            print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f} | Real Vel: {tcp_vel:.1f}")
         except Exception as e:
             print(f"[ERROR] Tilt Move Failed: {e}")
             return False
@@ -414,7 +415,7 @@ def main(args=None):
     DR_init.__dsr__model = ROBOT_MODEL
     DR_init.__dsr__node = robot_node
 
-    # 💡 [수정] 중복된 add_node를 제거하고 깨끗하게 15개 스레드로 실행
+    # 💡 [수정] 중복된 add_node를 확실하게 제거하고 15개 스레드로 안정적 실행
     executor = MultiThreadedExecutor(num_threads=15)
     executor.add_node(robot_node)
     executor.add_node(task_node)
@@ -424,6 +425,7 @@ def main(args=None):
 
     print("==========================================")
     print(" [Ready] Service Server Started (Multi-Node) ")
+    print(f" - service: /{ROBOT_ID}/execute_pouring")
     print("==========================================")
 
     try:
