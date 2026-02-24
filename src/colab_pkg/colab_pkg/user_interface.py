@@ -160,6 +160,9 @@ class UserInterface(Node):
 
         self.latest_system_status = {
             "phase": msg.phase,
+            "tcp_vel": msg.tcp_vel,       # 주석 해제 (복구)
+            "tcp_acc": msg.tcp_acc,       # 주석 해제 (복구)
+            "pour_speed": msg.pour_speed, # 주석 해제 (복구)
             "total_count": msg.total_count,
             "success_count": msg.success_count,
             "error_rate": round(msg.error_rate, 2),
@@ -226,15 +229,7 @@ class UserInterface(Node):
         # 1. 관절 각도 저장
         self.latest_joints = [math.degrees(rad) for rad in msg.position]
         self.last_joint_time = time.time()
-        
-        # 2. [추가] joint_states의 velocity 배열에서 J6 속도 추출 (pour_speed)
-        if hasattr(msg, 'velocity') and len(msg.velocity) >= 6:
-            j6_vel_rad = msg.velocity[5] # 6번째 관절의 속도 (rad/s)
-            pour_speed_deg = math.degrees(j6_vel_rad) # deg/s로 변환
-            
-            # UI에 띄우기 위해 시스템 상태 딕셔너리에 즉시 업데이트
-            self.latest_system_status['pour_speed'] = round(abs(pour_speed_deg), 1)
-        
+
     def weight_callback(self, msg): 
         self.latest_weight = msg.data
 
