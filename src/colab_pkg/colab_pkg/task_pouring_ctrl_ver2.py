@@ -356,6 +356,8 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         # 다음 루프를 위해 이전 값 업데이트
         prev_tcp_vel = actual_tcp_vel
         prev_time = current_time
+
+        print(f"[API Check] TCP Vel: {actual_tcp_vel:.1f} | Acc: {actual_tcp_acc:.1f} | J6 Vel: {actual_pour_speed:.1f}")
         # ----------------------------------------------------
 
         if current_weight >= stop_target:
