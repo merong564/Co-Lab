@@ -46,7 +46,7 @@ class UserInterface(Node):
             self.get_logger().error(f"Firebase Error: {e}")
 
         if IMPORT_SUCCESS:
-            self.cli = self.create_client(RobotCommand, 'execute_pouring')
+            self.cli = self.create_client(RobotCommand, 'start_process')
             self.stop_pub = self.create_publisher(String, 'stop/ui', 10)
             
             self.create_subscription(JointState, 'dsr01/joint_states', self.joint_callback, 10)
