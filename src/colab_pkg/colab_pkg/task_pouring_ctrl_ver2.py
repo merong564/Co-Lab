@@ -15,7 +15,7 @@ import DR_init
 
 from colab_interfaces.srv import RobotCommand
 from std_msgs.msg import Float32, String
-from colab_interfaces.msg import SystemStatus, ControlMetrics # 💡 [수정] ControlMetrics 임포트 추가
+from colab_interfaces.msg import SystemStatus, ControlMetrics 
 
 # ==========================================
 # 1. 설정 및 상수
@@ -44,7 +44,7 @@ TUBE_TUNING = {
 }
 
 # ==========================================
-# 정량 지표 계산 함수 (node 파라미터 추가)
+# 정량 지표 계산 함수
 # ==========================================
 def calc_metrics(node, log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step, stop_thresh, tube_type, actual_cycle_time):
     if not log_w:
@@ -84,14 +84,12 @@ def calc_metrics(node, log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt
     print(f"Avg Pouring Rate: {avg_pouring_rate:.2f} g/s") 
     print("-----------------")
 
-    # 💡 [수정] 시스템 상태 토픽 발행 (제어 지표 제외)
     node.publish_system_status(
         phase="Ready", 
         err_rate=error_rate, 
         cycle_t=cycle_time
     )
 
-    # 💡 [추가] 제어 성능 데이터 전용 토픽 발행 (DB 저장용)
     node.publish_control_metrics(
         p_gain=p_gain, d_gain=d_gain, max_tilt_step=max_tilt_step, stop_thresh=stop_thresh,
         p_d_ratio=p_d_ratio, overshoot=overshoot, rise_time=rise_t, settling_time=set_t, ss_error=ss_err
@@ -131,8 +129,9 @@ class TaskPouring(Node):
         self.success_count = 0
 
         self.pub_status = self.create_publisher(SystemStatus, "system_status", 10, callback_group=self.callback_group)
-        # 💡 [추가] ControlMetrics 발행기 추가
-        self.pub_metrics = self.create_publisher(ControlMetrics, "control_metrics", 10, callback_group=self.callback_group)
+        
+        # 💡 [핵심 수정] UI 코드와 동일하게 토픽명을 "log_control_metrics"로 변경했습니다!
+        self.pub_metrics = self.create_publisher(ControlMetrics, "log_control_metrics", 10, callback_group=self.callback_group)
 
         self.srv_pouring = self.create_service(
             RobotCommand,
@@ -157,7 +156,6 @@ class TaskPouring(Node):
             callback_group=self.callback_group,
         )
 
-    # 💡 [수정] SystemStatus에서 제어 지표(p, d, overshoot 등) 관련 파라미터 전부 제거
     def publish_system_status(self, phase="Ready", tcp_vel=0.0, tcp_acc=0.0, pour_speed=0.0, err_rate=0.0, cycle_t=0.0):
         msg = SystemStatus()
         msg.phase = phase
@@ -172,7 +170,6 @@ class TaskPouring(Node):
         
         self.pub_status.publish(msg)
 
-    # 💡 [추가] ControlMetrics 전용 발행 함수
     def publish_control_metrics(self, p_gain, d_gain, max_tilt_step, stop_thresh, p_d_ratio, overshoot, rise_time, settling_time, ss_error):
         msg = ControlMetrics()
         msg.p_gain = float(p_gain)
@@ -203,17 +200,15 @@ class TaskPouring(Node):
 
         self.total_count += 1
         
-        # 💡 [수정] 이동 시작 단계 알림 (p_gain 제거)
         self.publish_system_status(phase="Transfer")
 
-        # 💡 [데드락 방지] 로봇 제어 로직을 별도 스레드에서 실행
         res_container = [False]
         def run_task():
             res_container[0] = perform_task(self, float(target_w), tube_type)
         
         t = threading.Thread(target=run_task)
         t.start()
-        t.join() # 작업 스레드가 끝날 때까지 대기
+        t.join() 
 
         success = res_container[0]
         if success:
@@ -329,7 +324,6 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
 
     while rclpy.ok():
         if STOP_REQUESTED:
-            # 💡 [Phase: Return] 중단 시 복귀 단계 알림
             node.publish_system_status(phase="Return")
             try:
                 movel(pour_ready_pos, vel=150, acc=150)
@@ -350,17 +344,12 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         log_t.append(current_time - start_t) 
         log_w.append(current_weight) 
 
-        # ----------------------------------------------------
-        # 💡 [변수명 통일] .msg 규격에 맞춘 tcp_vel, tcp_acc, pour_speed 실시간 센서값 추출
-        # ----------------------------------------------------
         try:
-            # 1. TCP 직교 속도 및 가속도
-            velx = get_current_velx() # [vx, vy, vz, rx, ry, rz]
+            velx = get_current_velx() 
             tcp_vel = math.sqrt(velx[0]**2 + velx[1]**2 + velx[2]**2)
             tcp_acc = (tcp_vel - prev_tcp_vel) / dt if dt > 0 else 0.0
             
-            # 2. 붓기 속도 (J6 관절 속도)
-            velj = get_current_velj() # [v1, v2, v3, v4, v5, v6]
+            velj = get_current_velj() 
             pour_speed = abs(velj[5])
         except Exception as e:
             tcp_vel, tcp_acc, pour_speed = 0.0, 0.0, 0.0
@@ -368,11 +357,9 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         prev_tcp_vel = tcp_vel
         prev_time = current_time
 
-        # 터미널 확인용 로그
         print(f"[API Check] TCP Vel: {tcp_vel:.1f} | Acc: {tcp_acc:.1f} | J6 Vel: {pour_speed:.1f}")
 
         if current_weight >= stop_target:
-            # 💡 [Phase: Return] 목표 도달 시 복귀 단계 알림
             node.publish_system_status(phase="Return")
             try:
                 movel(pour_ready_pos, vel=150, acc=150)
@@ -393,7 +380,6 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
         delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step) 
         log_d.append(delta) 
 
-        # 💡 [수정] 붓기 중 실시간 상태 발행 (p, d 제어값 제거)
         node.publish_system_status(
             phase="Pouring", 
             tcp_vel=tcp_vel, 
@@ -424,7 +410,6 @@ def main(args=None):
     DR_init.__dsr__model = ROBOT_MODEL
     DR_init.__dsr__node = robot_node
 
-    # 💡 [수정] 중복된 add_node를 확실하게 제거하고 15개 스레드로 안정적 실행
     executor = MultiThreadedExecutor(num_threads=15)
     executor.add_node(robot_node)
     executor.add_node(task_node)
