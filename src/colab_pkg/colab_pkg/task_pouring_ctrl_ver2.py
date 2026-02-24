@@ -16,7 +16,7 @@ import DR_init
 from colab_interfaces.srv import RobotCommand
 from std_msgs.msg import Float32, String
 from colab_interfaces.msg import SystemStatus 
-
+from colab_interfaces.msg import ControlMetrics 
 # ==========================================
 # 1. 설정 및 상수
 # ==========================================
