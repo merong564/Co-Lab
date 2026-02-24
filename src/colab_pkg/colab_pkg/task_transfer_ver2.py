@@ -12,7 +12,7 @@ from colab_interfaces.srv import RobotCommand
 from std_msgs.msg import String
 
 # ===============================
-# 1. 설정 및 상수 (원본 유지)
+# 1. 설정 및 상수
 # ===============================
 ROBOT_ID = "dsr01"
 ROBOT_MODEL = "m0609"
@@ -27,10 +27,9 @@ DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
 # ===============================
-# [추가] STOP → 에러로 정지
+# STOP 처리 (노드 죽이지 않기)
 # ===============================
-CRASH_ON_STOP = True         # True: STOP 즉시 raise로 노드 터뜨림
-STOP_REQUESTED = False       # STOP 플래그
+STOP_REQUESTED = False  # STOP 플래그
 
 
 class TaskTransfer(Node):
@@ -39,7 +38,7 @@ class TaskTransfer(Node):
 
         self.callback_group = ReentrantCallbackGroup()
 
-        # [추가] STOP 토픽 구독 (/dsr01/stop)
+        # STOP 토픽 구독 (/dsr01/stop)
         self.sub_stop = self.create_subscription(
             String,
             'stop',
@@ -48,6 +47,7 @@ class TaskTransfer(Node):
             callback_group=self.callback_group
         )
 
+        # 서비스 서버 (/dsr01/execute_transfer)
         self.srv_transfer = self.create_service(
             RobotCommand,
             'execute_transfer',
@@ -56,32 +56,51 @@ class TaskTransfer(Node):
         )
         self.get_logger().info("TaskTransfer Ready. Service: execute_transfer")
 
-    # [추가] STOP 콜백: 플래그 올리고, 옵션에 따라 일부러 에러 발생
     def stop_callback(self, msg: String):
+        """
+        /dsr01/stop 토픽:
+          - "STOP"  : 작업 중단 플래그 + (가능하면) 로봇 즉시 정지 시도
+          - "RESET" : STOP 플래그 해제
+        """
         global STOP_REQUESTED
-        if (msg.data or "").strip().upper() != "STOP":
-            return
+        cmd = (msg.data or "").strip().upper()
 
-        STOP_REQUESTED = True
-        self.get_logger().warn("[WARN] STOP received") 
+        if cmd == "STOP":
+            STOP_REQUESTED = True
+            self.get_logger().warn("[WARN] STOP received -> stop flag set (node stays alive)")
 
-        if CRASH_ON_STOP:
-            # 의도적으로 에러 띄워서 정지(노드 종료)
-            raise RuntimeError("EMERGENCY STOP (intentional crash)")
+            # 가능한 경우, 즉시 모션 정지 시도 (환경/버전에 따라 함수명이 다를 수 있어서 안전하게 try)
+            try:
+                from DSR_ROBOT2 import stop, DR_QSTOP
+                stop(DR_QSTOP)
+                self.get_logger().warn("[WARN] Robot stop() called (DR_QSTOP)")
+            except Exception:
+                try:
+                    from DSR_ROBOT2 import stop, DR_SSTOP
+                    stop(DR_SSTOP)
+                    self.get_logger().warn("[WARN] Robot stop() called (DR_SSTOP)")
+                except Exception:
+                    # stop 함수가 없거나 사용 불가해도 노드는 유지
+                    pass
+
+        elif cmd == "RESET":
+            STOP_REQUESTED = False
+            self.get_logger().info("[INFO] RESET received -> stop flag cleared")
 
     def execute_transfer_callback(self, request, response):
         global STOP_REQUESTED
-        STOP_REQUESTED = False  # 작업 시작 시 초기화
+
+        # 작업 시작 시 STOP 플래그 초기화(원하면 주석 처리 가능)
+        STOP_REQUESTED = False
 
         mode = (getattr(request, "mode", "") or "").strip().upper()
 
-        # [수정] 서비스 request 데이터에서 시험관 종류를 동적으로 파악 (배열 인터페이스 반영)
+        # request.targets[0] 기반
         targets_list = getattr(request, "targets", ["LARGE"])
         tube_type = targets_list[0].strip().upper() if targets_list else "LARGE"
 
         self.get_logger().info(f"[Service] Request Received. Mode: {mode}, Tube: {tube_type}")
 
-        # [추가] perform_task에서 STOP이면 raise로 끊기도록 처리됨
         try:
             perform_task(mode, tube_type)
             response.success = True
@@ -129,9 +148,14 @@ def get_poses(posx_func):
 
 
 def initialize_robot():
-    from DSR_ROBOT2 import set_tool, set_tcp, set_robot_mode, get_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS
+    from DSR_ROBOT2 import (
+        set_tool, set_tcp,
+        set_robot_mode, get_robot_mode,
+        ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS
+    )
 
     set_robot_mode(ROBOT_MODE_MANUAL)
+    set_tool(ROBOT_TOOL)
     set_tcp(ROBOT_TCP)
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
     time.sleep(1.0)
@@ -145,7 +169,7 @@ def perform_task(mode, tube_type):
     global STOP_REQUESTED
     from DSR_ROBOT2 import movej, movel, posx, wait, set_digital_output, DR_BASE
     from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS
-    
+
     set_robot_mode(ROBOT_MODE_MANUAL)
     set_tcp(ROBOT_TCP)
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
@@ -158,7 +182,13 @@ def perform_task(mode, tube_type):
     def _check_stop(tag=""):
         global STOP_REQUESTED
         if STOP_REQUESTED:
-            raise RuntimeError(f"STOP (intentional error) at: {tag}")
+            # 작업 중단 시도 + 가능한 경우 로봇 정지(추가 안전)
+            try:
+                from DSR_ROBOT2 import stop, DR_QSTOP
+                stop(DR_QSTOP)
+            except Exception:
+                pass
+            raise RuntimeError(f"STOP at: {tag}")
 
     def gripper_open():
         set_digital_output(2, ON)
@@ -176,30 +206,36 @@ def perform_task(mode, tube_type):
         set_digital_output(1, ON)
         set_digital_output(2, OFF)
         wait(2.0)
-        
+
     def target_gripper_open():
         if tube_type == "LARGE":
             gripper_large_open()
         else:
             gripper_open()
 
-    # [추가] 모듈화된 작업 함수들 정의
     def _pickup_tube_common(P):
         _check_stop("before movej ready")
         movej(J_READY, vel=VEL, acc=ACC)
         wait(0.5)
+
         _check_stop("before target_gripper_open")
         target_gripper_open()
+
         _check_stop("before movel PICK_UP")
         movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel PICK_DOWN")
         movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before gripper_close")
         gripper_close()
+
         _check_stop("before movel PICK_UP(2)")
         movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel POUR_UP")
         movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel POUR_READY")
         movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
 
@@ -210,108 +246,135 @@ def perform_task(mode, tube_type):
         _pickup_tube_common(P)
 
     def pickup_beaker(P):
-        # POUR 위치가 없는 비커의 기본 픽업
         _check_stop("before movej ready")
         movej(J_READY, vel=VEL, acc=ACC)
         wait(0.5)
+
         _check_stop("before target_gripper_open")
         target_gripper_open()
+
         _check_stop("before movel PICK_UP")
         movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel PICK_DOWN")
         movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before gripper_close")
         gripper_close()
+
         _check_stop("before movel PICK_UP(2)")
         movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
     def return_large(P):
-        _check_stop("before movel POUR_READY to POUR_UP")
+        _check_stop("before movel POUR_READY")
         movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+
+        _check_stop("before movel POUR_UP")
         movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-        # [추가] 비커의 PICK_UP 위치로 이동
-        _check_stop("before movel BEAKER PICK_UP")
+
+        _check_stop("before movel RETURN_READY")
         movel(P["RETURN_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel RETURN_UP")
         movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel RETURN_DOWN")
         movel(P["RETURN_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before target_gripper_open")
         target_gripper_open()
+
         _check_stop("before movel RETURN_UP(2)")
         movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movej ready")
         movej(J_READY, vel=VEL, acc=ACC)
 
     def return_small(P):
-        _check_stop("before movel POUR_READY to POUR_UP")
+        _check_stop("before movel POUR_READY")
         movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+
+        _check_stop("before movel POUR_UP")
         movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel PICK_UP")
         movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel PICK_DOWN")
         movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before target_gripper_open")
         target_gripper_open()
+
         _check_stop("before movel PICK_UP(2)")
         movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movej ready")
         movej(J_READY, vel=VEL, acc=ACC)
 
     def return_beaker(P):
-        # 지시해주신 비커 전용 단일 시퀀스 
         _check_stop("before target_gripper_open")
         target_gripper_open()
+
         _check_stop("before movel PICK_UP")
         movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel PICK_DOWN")
         movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before gripper_close")
         gripper_close()
+
         _check_stop("before movel PICK_UP(2)")
         movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel RETURN_UP")
         movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movel RETURN_DOWN")
         movel(P["RETURN_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
-        _check_stop("before target_gripper_open")
+
+        _check_stop("before target_gripper_open(2)")
         target_gripper_open()
+
         _check_stop("before movel RETURN_UP(2)")
         movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         _check_stop("before movej ready")
         movej(J_READY, vel=VEL, acc=ACC)
 
-    try:
-        P = POSES[tube_type]
+    # --- 실제 실행 ---
+    if tube_type not in POSES:
+        raise RuntimeError(f"Unknown tube_type: {tube_type} (valid: {list(POSES.keys())})")
 
-        # [추가] 간소화된 분기 제어문
-        if mode == "PICKUP":
-            print(f"[Action] PICKUP Start ({tube_type})")
-            if tube_type == "LARGE":
-                pickup_large(P)
-            elif tube_type in ["SMALL1", "SMALL2"]:
-                pickup_small(P)
-            elif tube_type == "BEAKER":
-                pickup_beaker(P)
-            print("[Action] PICKUP Done")
+    P = POSES[tube_type]
 
-        elif mode == "RETURN":
-            print(f"[Action] RETURN Start ({tube_type})")
-            if tube_type == "LARGE":
-                return_large(P)
-            elif tube_type in ["SMALL1", "SMALL2"]:
-                return_small(P)
-            elif tube_type == "BEAKER":
-                return_beaker(P)
-            print("[Action] RETURN Done")
+    if mode == "PICKUP":
+        print(f"[Action] PICKUP Start ({tube_type})")
+        if tube_type == "LARGE":
+            pickup_large(P)
+        elif tube_type in ["SMALL1", "SMALL2"]:
+            pickup_small(P)
+        elif tube_type == "BEAKER":
+            pickup_beaker(P)
+        print("[Action] PICKUP Done")
 
-    except Exception as e:
-        print(f" [Action] Failed: {e}")
-        raise
+    elif mode == "RETURN":
+        print(f"[Action] RETURN Start ({tube_type})")
+        if tube_type == "LARGE":
+            return_large(P)
+        elif tube_type in ["SMALL1", "SMALL2"]:
+            return_small(P)
+        elif tube_type == "BEAKER":
+            return_beaker(P)
+        print("[Action] RETURN Done")
+
+    else:
+        raise RuntimeError(f"Unknown mode: {mode} (use PICKUP or RETURN)")
 
 
 # ===============================
-# 3. 메인 (원본 유지)
+# 3. 메인
 # ===============================
 def main(args=None):
     rclpy.init(args=args)
