@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-import time
 import rclpy
 from rclpy.node import Node
 import DR_init
 
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
+
+from std_msgs.msg import String
 from colab_interfaces.srv import RobotCommand
 
 # ===============================
@@ -26,30 +27,20 @@ class TaskRecovery(Node):
 
         self.callback_group = ReentrantCallbackGroup()
 
-        from DSR_ROBOT2 import (
-            set_tool, set_tcp,
-            set_robot_mode, ROBOT_MODE_AUTONOMOUS,
-            get_current_posx, movel, movej, posx, posj, DR_BASE
-        )
-
-        self.set_tool = set_tool
-        self.set_tcp = set_tcp
-        self.set_robot_mode = set_robot_mode
-        self.ROBOT_MODE_AUTONOMOUS = ROBOT_MODE_AUTONOMOUS
-
-        self.get_current_posx = get_current_posx
-        self.movel = movel
-        self.movej = movej
-        self.posx = posx
-        self.posj = posj
-        self.DR_BASE = DR_BASE
+        # STOP 처리
+        self.stop_requested = False
+        self.sub_stop = self.create_subscription(String, 'stop', self._on_stop, 10)
 
         # 속도
         self.J_VEL, self.J_ACC = 30, 30
         self.L_VEL, self.L_ACC = 80, 80
 
+        # 4번 테스트: Z 올리고 홈 복귀
+        self.Z_UP_MM = 120.0
+
         # 홈(너가 준 값)
-        self.home_j = self.posj(0, 0, 90.0, 0, 90.0, 0)
+        from DSR_ROBOT2 import posj
+        self.home_j = posj(0, 0, 90.0, 0, 90.0, 0)
 
         self.srv = self.create_service(
             RobotCommand,
@@ -58,51 +49,113 @@ class TaskRecovery(Node):
             callback_group=self.callback_group
         )
 
-        # 로봇 기본 세팅 (너희 Task들처럼)
+        # 로봇 기본 세팅
         try:
-            self.set_robot_mode(self.ROBOT_MODE_AUTONOMOUS)
-            self.set_tool(ROBOT_TOOL)
-            self.set_tcp(ROBOT_TCP)
+            from DSR_ROBOT2 import set_tool, set_tcp, set_robot_mode, ROBOT_MODE_AUTONOMOUS
+            set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+            set_tool(ROBOT_TOOL)
+            set_tcp(ROBOT_TCP)
         except Exception as e:
             self.get_logger().warn(f"Robot init setting failed (continue): {e}")
 
         self.get_logger().info("TaskRecovery Ready. Service: /dsr01/execute_recovery")
 
-    def _try_release_force_compliance(self):
-        """환경마다 함수명이 달라서 '있으면 호출' 방식으로 안전하게 처리"""
+    def _on_stop(self, msg: String):
+        self.stop_requested = True
+        self.get_logger().warn(f"[STOP] received: {msg.data}")
+
+    def _check_stop(self):
+        if self.stop_requested:
+            raise RuntimeError("STOP topic received")
+
+    # ===============================
+    # 3) perform_task 안에 로봇 동작 모으기
+    # ===============================
+    def perform_task(self, request):
+        from DSR_ROBOT2 import (
+            release_force, release_compliance_ctrl, wait,
+            get_current_posx, movel, movej, posx, posj, DR_BASE
+        )
+
+        # ---- (요구사항 5) 물체별 return 함수들: perform_task 내부에 두기 ----
+        def return_large():
+            # TODO: 아래 좌표는 너희 LARGE 원위치 좌표로 교체
+            # 예: 랙 접근/원위치/그리퍼 오픈/후퇴 순서
+            self.get_logger().warn("[RETURN] LARGE -> TODO positions")
+            # movej(posj(...), vel=self.J_VEL, acc=self.J_ACC)
+            # wait(0.2)
+
+        def return_small1():
+            self.get_logger().warn("[RETURN] SMALL1 -> TODO positions")
+            # movej(posj(...), vel=self.J_VEL, acc=self.J_ACC)
+            # wait(0.2)
+
+        def return_beaker():
+            self.get_logger().warn("[RETURN] BEAKER -> TODO positions")
+            # movej(posj(...), vel=self.J_VEL, acc=self.J_ACC)
+            # wait(0.2)
+
+        # ---- 1) 힘/컴플라이언스 해제 (요구사항 1) ----
+        # “두산 제공 함수만 사용” 조건은 지키면서, 실패해도 복구가 진행되도록 예외는 무시(현장 안전)
         try:
-            import DSR_ROBOT2 as dsr
-            for fn_name in ["release_force", "release_compliance_ctrl", "release_task_compliance_ctrl"]:
-                fn = getattr(dsr, fn_name, None)
-                if callable(fn):
-                    try:
-                        fn()
-                        self.get_logger().warn(f"[RECOVERY] called {fn_name}()")
-                    except Exception:
-                        pass
+            release_force()
         except Exception:
             pass
+        try:
+            release_compliance_ctrl()
+        except Exception:
+            pass
+        wait(0.2)
+
+        self._check_stop()
+
+        # ---- 2) 현재 자세에서 Z-up (요구사항 4) ----
+        cur, _ = get_current_posx(ref=DR_BASE)  # [x,y,z,rx,ry,rz]
+        x, y, z, rx, ry, rz = cur
+        z_up = z + self.Z_UP_MM
+
+        self.get_logger().warn(f"[RECOVERY] z={z:.2f} -> z_up={z_up:.2f}")
+
+        movel(posx(x, y, z_up, rx, ry, rz), vel=self.L_VEL, acc=self.L_ACC, ref=DR_BASE)
+        wait(0.2)
+
+        self._check_stop()
+
+        # ---- 3) 홈 이동 ----
+        movej(self.home_j, vel=self.J_VEL, acc=self.J_ACC)
+        wait(0.2)
+
+        self._check_stop()
+
+        # ---- 5) 들고 있는 물체 확인 후 원위치 (요구사항 5) ----
+        # 판별 기준: request.targets[0] (컨트롤러가 넣어줘야 함)
+        target = None
+        if getattr(request, "targets", None) and len(request.targets) > 0:
+            target = str(request.targets[0]).strip().upper()
+
+        if not target:
+            self.get_logger().warn("[RECOVERY] No target in request.targets -> skip return_xxx()")
+            return
+
+        if target == "LARGE":
+            return_large()
+        elif target == "SMALL1":
+            return_small1()
+        elif target == "BEAKER":
+            return_beaker()
+        else:
+            self.get_logger().warn(f"[RECOVERY] Unknown target='{target}' -> skip return_xxx()")
 
     def execute_recovery_callback(self, request, response):
+        # recovery 시작 시 stop 플래그 초기화(복구 목적)
+        self.stop_requested = False
+
         try:
-            self.get_logger().warn(f"[RECOVERY] mode={request.mode} targets={list(request.targets)}")
-
-            # 1) force/compliance 해제 시도
-            self._try_release_force_compliance()
-
-            # 2) 현재 자세에서 Z-up
-            cur, _ = self.get_current_posx(ref=self.DR_BASE)  # [x,y,z,rx,ry,rz]
-            x, y, z, rx, ry, rz = cur
-            z_up = z + 120.0
-
-            self.movel(
-                self.posx(x, y, z_up, rx, ry, rz),
-                vel=self.L_VEL, acc=self.L_ACC, ref=self.DR_BASE
+            self.get_logger().warn(
+                f"[RECOVERY] mode={request.mode} targets={list(request.targets)}"
             )
-            time.sleep(0.1)
 
-            # 3) 홈 이동
-            self.movej(self.home_j, vel=self.J_VEL, acc=self.J_ACC)
+            self.perform_task(request)
 
             response.success = True
             response.message = "RECOVERY_DONE"
@@ -141,12 +194,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
-##################################################################
-#########shock 토픽 강제 발행 명령어#########################3#################################
-######ros2 topic pub /dsr01/safety/shock std_msgs/msg/String "{data: 'IMPACT_TEST'}" -1
-#################################################################################################
-########recovery 서비스 강제 호출 명령어################################################################################333
-#ros2 service call /dsr01/execute_recovery colab_interfaces/srv/RobotCommand \
-#"{mode: 'RECOVERY', targets: ['reason=TEST'], target_weights: [], mixing_duration: 0.0}"
-####################################################################################3
