@@ -151,7 +151,7 @@ class TaskPouring(Node):
 
         self.sub_stop = self.create_subscription(
             String,
-            "stop",
+            "stop/ui",
             self.stop_callback,
             10,
             callback_group=self.callback_group,
