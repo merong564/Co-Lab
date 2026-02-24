@@ -4,7 +4,7 @@ import threading
 import csv 
 import os 
 from datetime import datetime 
-import math # [추가] 속도/가속도 벡터 연산을 위한 모듈
+import math 
 
 import rclpy
 from rclpy.node import Node
@@ -84,6 +84,7 @@ def calc_metrics(node, log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt
     print(f"Avg Pouring Rate: {avg_pouring_rate:.2f} g/s") 
     print("-----------------")
 
+    # 💡 [Phase: Ready] 작업 완료 후 대기 상태로 전환
     node.publish_system_status(
         phase="Ready", 
         p=p_gain, d=d_gain, max_step=max_tilt_step, stop_th=stop_thresh,
@@ -109,6 +110,7 @@ def calc_metrics(node, log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt
             round(set_t, 2), round(ss_err, 2), tube_type, round(error_rate, 2), round(p_d_ratio, 2), 
             round(avg_pouring_rate, 2), round(cycle_time, 2), round(overhead_time, 2)
         ])
+
 
 # ==========================================
 # 2. 통신 전담 노드 (서비스 & 토픽)
@@ -190,10 +192,20 @@ class TaskPouring(Node):
         self.get_logger().info(f"[Service] Request Received. Tube: {tube_type}, Target: {target_w}g")
 
         self.total_count += 1
-        self.publish_system_status(phase="Pouring", p=TUBE_TUNING.get(tube_type, {}).get("P_GAIN", 0.0))
+        
+        # 💡 [Phase: Transfer] 이동 시작 단계 알림
+        self.publish_system_status(phase="Transfer", p=TUBE_TUNING.get(tube_type, {}).get("P_GAIN", 0.0))
 
-        success = perform_task(self, float(target_w), tube_type)
+        # 💡 [데드락 방지] 로봇 제어 로직을 별도 스레드에서 실행
+        res_container = [False]
+        def run_task():
+            res_container[0] = perform_task(self, float(target_w), tube_type)
+        
+        t = threading.Thread(target=run_task)
+        t.start()
+        t.join() # 작업 스레드가 끝날 때까지 대기
 
+        success = res_container[0]
         if success:
             self.success_count += 1 
 
@@ -247,7 +259,6 @@ def calculate_tilt_angle_pd(current_w: float, target_w: float, p_gain: float, d_
     return float(delta_angle), float(error) 
 
 def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARGE") -> bool:
-    # [수정] DSR_ROBOT2 모듈에서 실시간 속도 확인용 get_current_velx, get_current_velj 추가 임포트
     from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait, get_current_velx, get_current_velj
     from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS 
     
@@ -303,12 +314,13 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     stop_target = target_weight - active_stop_thresh
     prev_error = target_weight - float(node.current_weight)
 
-    # [추가] 가속도 미분 계산을 위한 이전 값 기록 변수
     prev_tcp_vel = 0.0
     prev_time = time.time()
 
     while rclpy.ok():
         if STOP_REQUESTED:
+            # 💡 [Phase: Return] 중단 시 복귀 단계 알림
+            node.publish_system_status(phase="Return")
             try:
                 movel(pour_ready_pos, vel=150, acc=150)
                 wait(1.0)
@@ -322,45 +334,35 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
             return True  
 
         current_weight = float(node.current_weight)
-
-        cur_t = time.time() - start_t 
-        log_t.append(cur_t) 
-        log_w.append(current_weight) 
-
-        # ----------------------------------------------------
-        # [추가] 실시간 TCP 속도, 붓기 속도, 가속도 수집 및 연산
-        # ----------------------------------------------------
         current_time = time.time()
         dt = current_time - prev_time
         
+        log_t.append(current_time - start_t) 
+        log_w.append(current_weight) 
+
+        # ----------------------------------------------------
+        # 💡 [변수명 통일] .msg 규격에 맞춘 tcp_vel, tcp_acc, pour_speed 연산
+        # ----------------------------------------------------
         try:
-            # get_current_velx() 반환: [vx, vy, vz, rx, ry, rz]
             velx = get_current_velx()
-            # 벡터의 크기(속력) 계산 (단위: mm/s)
-            actual_tcp_vel = math.sqrt(velx[0]**2 + velx[1]**2 + velx[2]**2)
+            tcp_vel = math.sqrt(velx[0]**2 + velx[1]**2 + velx[2]**2)
             
-            # get_current_velj() 반환: 관절 1~6의 속도 (단위: deg/s)
             velj = get_current_velj()
-            actual_pour_speed = abs(velj[5]) # 6번 관절 속도
-        except Exception as e:
-            # API 연결 지연이나 시뮬레이션 환경 대비용 폴백
-            actual_tcp_vel = 0.0
-            actual_pour_speed = 0.0
+            pour_speed = abs(velj[5])
             
-        # 가속도 계산 (dv/dt)
-        if dt > 0:
-            actual_tcp_acc = (actual_tcp_vel - prev_tcp_vel) / dt
-        else:
-            actual_tcp_acc = 0.0
-            
-        # 다음 루프를 위해 이전 값 업데이트
-        prev_tcp_vel = actual_tcp_vel
+            tcp_acc = (tcp_vel - prev_tcp_vel) / dt if dt > 0 else 0.0
+        except:
+            tcp_vel, tcp_acc, pour_speed = 0.0, 0.0, 0.0
+
+        prev_tcp_vel = tcp_vel
         prev_time = current_time
 
-        print(f"[API Check] TCP Vel: {actual_tcp_vel:.1f} | Acc: {actual_tcp_acc:.1f} | J6 Vel: {actual_pour_speed:.1f}")
-        # ----------------------------------------------------
+        # 터미널 확인용 로그
+        print(f"[API Check] TCP Vel: {tcp_vel:.1f} | Acc: {tcp_acc:.1f} | J6 Vel: {pour_speed:.1f}")
 
         if current_weight >= stop_target:
+            # 💡 [Phase: Return] 목표 도달 시 복귀 단계 알림
+            node.publish_system_status(phase="Return")
             try:
                 movel(pour_ready_pos, vel=150, acc=150)
                 wait(1.0)
@@ -375,26 +377,24 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
             calc_metrics(node, log_t, log_w, target_weight, final_settled_weight, 
                          active_p_gain, active_d_gain, active_max_tilt_step, active_stop_thresh, 
                          tube_type, actual_cycle_time)            
-            print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
         delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step) 
         log_d.append(delta) 
 
-        # [수정] 직접 구한 API 센서 기반의 tcp_vel, tcp_acc, pour_speed를 UI로 쏨!
+        # 💡 [Phase: Pouring] 붓기 중 실시간 상태 발행
         node.publish_system_status(
             phase="Pouring", 
-            tcp_vel=actual_tcp_vel, 
-            tcp_acc=actual_tcp_acc, 
-            pour_speed=actual_pour_speed,
+            tcp_vel=tcp_vel, 
+            tcp_acc=tcp_acc, 
+            pour_speed=pour_speed,
             p=active_p_gain, d=active_d_gain, max_step=active_max_tilt_step, stop_th=active_stop_thresh
         )
 
         try:
             rel_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, delta) 
             movel(rel_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1) 
-            print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f} | Vel: {actual_tcp_vel:.1f}")
-
+            print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f} | Vel: {tcp_vel:.1f}")
         except Exception as e:
             print(f"[ERROR] Tilt Move Failed: {e}")
             return False
@@ -414,7 +414,8 @@ def main(args=None):
     DR_init.__dsr__model = ROBOT_MODEL
     DR_init.__dsr__node = robot_node
 
-    executor = MultiThreadedExecutor()
+    # 💡 [수정] 중복된 add_node를 제거하고 깨끗하게 15개 스레드로 실행
+    executor = MultiThreadedExecutor(num_threads=15)
     executor.add_node(robot_node)
     executor.add_node(task_node)
 
@@ -423,9 +424,6 @@ def main(args=None):
 
     print("==========================================")
     print(" [Ready] Service Server Started (Multi-Node) ")
-    print(f" - service: /{ROBOT_ID}/execute_pouring")
-    print(f" - weight : /{ROBOT_ID}/load_cell/weight (Float32)")
-    print(f" - stop   : /{ROBOT_ID}/stop (String, data='STOP')")
     print("==========================================")
 
     try:
