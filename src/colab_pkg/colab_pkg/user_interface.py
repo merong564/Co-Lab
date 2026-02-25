@@ -143,8 +143,9 @@ class UserInterface(Node):
                 updates['robot_status/acceleration'] = self.latest_system_status.get('tcp_acc', 0)
             
             db.reference().update(updates)
-        except Exception:
-            pass
+        except Exception as e:
+            # 💡 [디버깅 추가] 에러가 나면 숨기지 말고 터미널에 빨간펜으로 소리치게 만듭니다!
+            self.get_logger().error(f"❌ 파이어베이스 업로드 실패: {e}")
 
     def system_status_callback(self, msg):
         # [수정] 시작: 로봇 노드가 재시작되거나 1회차 완료 시 저장이 누락(Skip)되는 버그 완벽 해결
@@ -231,7 +232,9 @@ class UserInterface(Node):
         self.last_joint_time = time.time()
 
     def weight_callback(self, msg): 
-        self.latest_weight = msg.data
+        self.latest_weight = float(msg.data)
+        # 💡 [디버깅 추가] 토픽 데이터를 잘 받고 있는지 터미널에 띄웁니다!
+        self.get_logger().info(f"📡 [UI 브릿지 수신]: {self.latest_weight:.1f} g")
 
 def main(args=None):
     rclpy.init(args=args)
