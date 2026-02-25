@@ -354,13 +354,16 @@
             document.getElementById('current_weight').innerText = "0.0";
             document.getElementById('current_flow').innerText = "0.0";
             
-            lastRawWeight = parseFloat(d.weight || 0); 
+            // 💡 [해결 포인트] 비커가 완전히 치워졌으므로 영점 보정 로직 초기화!
+            accumulatedOffset = 0; 
+            lastRawWeight = 0; 
             lastTime = Date.now();
             return;
         }
 
         const rawWeight = parseFloat(d.weight || 0);
 
+        // 💡 [안전 장치] Mixing 이후 Ready 상태일 때 갑자기 50g이 들어와도 오작동하지 않게 보호
         if (lastRawWeight - rawWeight > 5.0) {
             accumulatedOffset += lastRawWeight;
             addLog("🔄 [UI 보정] 영점 조절 감지됨. 이전 무게(" + lastRawWeight.toFixed(1) + "g) 누적 완료.");
