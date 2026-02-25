@@ -22,17 +22,25 @@ class ScaleDriver(Node):
         
         self.cal_ratio = 190.0 / 187.8  
         
-        # 💡 [적응형 필터 설정] lpf_alpha 변수가 사라지고 동적으로 계산됩니다.
-        self.filtered_weight = None     
-        self.published_weight = 0.0     
+        # 💡 [세계 최고 수준: 2D 운동학 칼만 필터 설정]
+        # 상태 변수: [무게(w), 유량(f)]
+        self.dt = 0.01  # 100Hz 타이머 주기
+        self.kf_w = 0.0 # 추정된 무게 (g)
+        self.kf_f = 0.0 # 추정된 유량 (g/s)
+        self.P = [[1.0, 0.0], [0.0, 1.0]] # 오차 공분산 행렬 (초기 불확실성)
         
-        # 💡 계단 현상 방지: 0.05g 이상의 미세한 변화도 물 흐르듯 통과시킵니다.
-        self.noise_window = 0.05         
+        # 🧠 칼만 필터 튜닝 파라미터 (Q, R)
+        self.Q_w = 0.001  # 모델 노이즈 (무게 변화 신뢰도)
+        self.Q_f = 0.01   # 모델 노이즈 (유량 변화 신뢰도)
         
-        # 💡 영점 유령 데이터 철벽 방어: 초기 0.55g 이하의 노이즈는 무조건 0으로 묶습니다.
-        self.zero_deadband = 0.55        
+        # 🚨 [핵심] 측정 노이즈 분산 (R): 노이즈 분석기로 직접 구한 표준편차(0.08g)의 제곱!
+        # 센서가 흔들리는 물리적 한계를 수학적으로 완벽히 알려줍니다.
+        self.R = 0.0064   
         
-        self.jump_threshold = 10.0       
+        self.published_weight = 0.0
+        self.noise_window = 0.05
+        self.zero_deadband = 0.55
+        self.jump_threshold = 10.0
         self.last_printed_weight = None
         
         self.publisher_ = self.create_publisher(Float32, 'load_cell/weight', 10)
@@ -44,7 +52,7 @@ class ScaleDriver(Node):
             callback_group=self.callback_group
         )
 
-        self.timer = self.create_timer(0.01, self.timer_callback, callback_group=self.callback_group)
+        self.timer = self.create_timer(self.dt, self.timer_callback, callback_group=self.callback_group)
 
     def execute_pouring_callback(self, request, response):
         self.get_logger().info(f"[Service] Request Received. Connecting to Arduino for Tare...")
@@ -60,7 +68,10 @@ class ScaleDriver(Node):
             time.sleep(2) 
             self.ser.reset_input_buffer()
             
-            self.filtered_weight = None 
+            # 영점 조절 시 칼만 필터 초기화
+            self.kf_w = 0.0
+            self.kf_f = 0.0
+            self.P = [[1.0, 0.0], [0.0, 1.0]]
             self.published_weight = 0.0
             
             self.is_active = True
@@ -83,32 +94,44 @@ class ScaleDriver(Node):
                     try:
                         raw_weight = float(line) * self.cal_ratio
                         
-                        if self.filtered_weight is None:
-                            self.filtered_weight = raw_weight
-                        else:
-                            # 🚀 [핵심] 찰나의 순간 변화량(instant_diff) 측정
-                            instant_diff = abs(raw_weight - self.filtered_weight)
-                            
-                            # 🧠 적응형 알파(Adaptive Alpha) 지능형 판단 로직
-                            if instant_diff > self.jump_threshold:
-                                # 1. 고체 타격 (10g 이상): 딜레이 0초, 필터 없이 100% 즉각 반영
-                                current_alpha = 1.0  
-                            elif instant_diff > 0.4:
-                                # 2. 액체 쾌속 투입 (0.4g 이상 변화): 딜레이 최소화 최우선!
-                                # 알파를 0.8로 대폭 끌어올려 0.1초의 지연도 없이 PD 제어기에 값을 꽂아 넣습니다.
-                                current_alpha = 0.8  
-                            elif instant_diff > 0.1:
-                                # 3. 액체 미세 투입 (0.1g 이상 변화): 딜레이와 노이즈의 완벽한 타협점
-                                current_alpha = 0.3  
-                            else:
-                                # 4. 정지 상태 (노이즈 구간): 지연은 상관없으니 숫자를 바위처럼 고정!
-                                # 알파를 0.05로 짓눌러서 0.5g짜리 파도도 잔잔하게 만들어 버립니다.
-                                current_alpha = 0.05 
+                        # 🚀 고체 충격(Jump) 감지 시 칼만 필터 강제 리셋 (오작동 방지)
+                        if abs(raw_weight - self.kf_w) > self.jump_threshold:
+                            self.kf_w = raw_weight
+                            self.kf_f = 0.0
+                            self.P = [[1.0, 0.0], [0.0, 1.0]]
 
-                            # 결정된 알파 값으로 필터링 적용 (current_alpha가 계속 변함)
-                            self.filtered_weight = (current_alpha * raw_weight) + ((1.0 - current_alpha) * self.filtered_weight)
+                        # ==========================================
+                        # 🧠 2D 칼만 필터링 핵심 로직
+                        # ==========================================
+                        # 1. 예측 (Predict): 물리 운동학 기반 (무게 = 이전 무게 + 유량 * 시간)
+                        w_pred = self.kf_w + self.kf_f * self.dt
+                        f_pred = self.kf_f
                         
-                        precise_weight = round(self.filtered_weight, 3)
+                        P00_pred = self.P[0][0] + self.dt * (self.P[1][0] + self.P[0][1]) + (self.dt ** 2) * self.P[1][1] + self.Q_w
+                        P01_pred = self.P[0][1] + self.dt * self.P[1][1]
+                        P10_pred = self.P[1][0] + self.dt * self.P[1][1]
+                        P11_pred = self.P[1][1] + self.Q_f
+
+                        # 2. 업데이트 (Update): 센서 측정값과 비교하여 오차 교정
+                        y = raw_weight - w_pred  # 실제 측정값과 예측값의 차이
+                        S = P00_pred + self.R    # 잔차 공분산
+                        K0 = P00_pred / S        # 무게에 대한 칼만 게인
+                        K1 = P10_pred / S        # 유량에 대한 칼만 게인
+
+                        # 최종 추정값 확정
+                        self.kf_w = w_pred + K0 * y
+                        self.kf_f = f_pred + K1 * y
+
+                        # 오차 공분산 업데이트
+                        self.P[0][0] = (1.0 - K0) * P00_pred
+                        self.P[0][1] = (1.0 - K0) * P01_pred
+                        self.P[1][0] = -K1 * P00_pred + P10_pred
+                        self.P[1][1] = -K1 * P01_pred + P11_pred
+
+                        # ==========================================
+                        # 후처리 (화면 및 토픽 출력용)
+                        # ==========================================
+                        precise_weight = round(self.kf_w, 3)
                         
                         diff = abs(precise_weight - self.published_weight)
                         if diff > self.noise_window:
@@ -121,7 +144,8 @@ class ScaleDriver(Node):
                             self.published_weight = 0.0
 
                         if self.published_weight != self.last_printed_weight:
-                            self.get_logger().info(f"⚖️ [현재 확정 무게]: {self.published_weight:.3f} g (알파 자동 조절 중)")
+                            # 💡 터미널에 깔끔해진 무게와 내부적으로 추정한 유량을 함께 출력합니다!
+                            self.get_logger().info(f"⚖️ [칼만 무게]: {self.published_weight:.3f} g | 🌊 [내부 추정 유량]: {self.kf_f:.3f} g/s")
                             self.last_printed_weight = self.published_weight
 
                         msg = Float32()
