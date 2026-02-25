@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Lab UI - v03</title>
+    <title>Smart Lab UI - v04 (Graph Fix)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -350,38 +350,40 @@
         lastUpdateTimestamp = Date.now();
         updateConnectionStatus('online', 'Autonomous');
 
+        // 💡 [수정] 함수를 종료하지 않고 변수에 0.0을 담아 그래프 그리는 곳까지 통과시킵니다.
+        let displayWeight = 0.0;
+        let flowRate = 0.0;
+        const currentTime = Date.now();
+
         if (currentPhase === "Mixing" || currentPhase === "Return") {
             document.getElementById('current_weight').innerText = "0.0";
             document.getElementById('current_flow').innerText = "0.0";
             
-            // 💡 [해결 포인트] 비커가 완전히 치워졌으므로 영점 보정 로직 초기화!
             accumulatedOffset = 0; 
             lastRawWeight = 0; 
-            lastTime = Date.now();
-            return;
+            
+            // displayWeight와 flowRate는 위에서 선언한 0.0으로 유지됨
+        } else {
+            const rawWeight = parseFloat(d.weight || 0);
+
+            if (lastRawWeight - rawWeight > 5.0) {
+                accumulatedOffset += lastRawWeight;
+                addLog("🔄 [UI 보정] 영점 조절 감지됨. 이전 무게(" + lastRawWeight.toFixed(1) + "g) 누적 완료.");
+            }
+            lastRawWeight = rawWeight;
+
+            displayWeight = rawWeight + accumulatedOffset;
+            
+            if (lastTime > 0) {
+                const dt = (currentTime - lastTime) / 1000;
+                if (dt > 0) flowRate = Math.max(0, (displayWeight - lastWeight) / dt);
+            }
+
+            document.getElementById('current_weight').innerText = displayWeight.toFixed(1);
+            document.getElementById('current_flow').innerText = flowRate.toFixed(1);
         }
 
-        const rawWeight = parseFloat(d.weight || 0);
-
-        // 💡 [안전 장치] Mixing 이후 Ready 상태일 때 갑자기 50g이 들어와도 오작동하지 않게 보호
-        if (lastRawWeight - rawWeight > 5.0) {
-            accumulatedOffset += lastRawWeight;
-            addLog("🔄 [UI 보정] 영점 조절 감지됨. 이전 무게(" + lastRawWeight.toFixed(1) + "g) 누적 완료.");
-        }
-        lastRawWeight = rawWeight;
-
-        const displayWeight = rawWeight + accumulatedOffset;
-        const currentTime = Date.now();
-        
-        let flowRate = 0;
-        if (lastTime > 0) {
-            const dt = (currentTime - lastTime) / 1000;
-            if (dt > 0) flowRate = Math.max(0, (displayWeight - lastWeight) / dt);
-        }
-
-        document.getElementById('current_weight').innerText = displayWeight.toFixed(1);
-        document.getElementById('current_flow').innerText = flowRate.toFixed(1);
-
+        // 💡 [핵심] 이제 Mixing 상태여도 여기까지 코드가 내려와서 0.0g을 그래프에 꽂아 넣습니다!
         if (isRunning) {
             let elapsedTime = ((currentTime - startTime) / 1000).toFixed(1);
             document.getElementById('last_cycle_time').innerText = elapsedTime; 
@@ -398,6 +400,8 @@
             combinedChart.data.datasets.forEach((dataset) => dataset.data.shift());
         }
         combinedChart.data.labels.push(new Date().toLocaleTimeString());
+        
+        // 그래프 데이터 푸시!
         combinedChart.data.datasets[0].data.push(displayWeight);
         combinedChart.data.datasets[1].data.push(flowRate);
         combinedChart.update('none');
