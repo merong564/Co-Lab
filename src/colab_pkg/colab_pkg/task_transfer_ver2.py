@@ -127,32 +127,36 @@ class TaskTransfer(Node):
 def get_poses(posx_func):
     return {
         "LARGE": {
-            "PICK_DOWN": posx_func(297.499, -60.308, 68.716, 88.614, 96.211, 91.805), # [수정]
-            "PICK_UP":   posx_func(287.293, -47.214, 222.645, 88.718, 96.254, 91.727), # [수정]
-            "POUR_READY": posx_func(561.045, 144.760, 188.965, 91.920, 97.358, 88.558), # [수정]
-            "RETURN_UP": posx_func(398.040, 351.050, 326.608, 90.329, 93.577, 89.530), # [수정]
-            "RETURN_DOWN": posx_func(389.408, 563.410, 72.182, 91.859, 98.698, 89.033), # [수정]
-            "AFTER_RETURN": posx_func(371.852, 520.254, 220.882, 89.661, 92.225, 89.338), # [수정]
-            "AFTER_RETURN_UP": posx_func(355.186, 533.297, 413.718, 89.688, 92.114, 88.361), # [수정]
-            "FINAL_POS": posx_func(309.545, 313.500, 141.890, 89.844, 90.996, 92.951) # [수정]
+            #68
+            "PICK_DOWN": posx_func(297.499, -60.308, 55.716, 88.614, 96.211, 91.805), # [수정]
+            "PICK_UP":   posx_func(287.293, -47.214, 209.645, 88.718, 96.254, 91.727), # [수정]
+            "POUR_UP": posx_func(561.045, 144.760, 175.965, 91.920, 97.358, 88.558),
+            "POUR_READY": posx_func(561.045, 144.760, 175.965, 91.920, 97.358, 88.558), # [수정]
+            "RETURN_UP": posx_func(398.040, 351.050, 313.608, 90.329, 93.577, 89.530), # [수정]
+            "RETURN_DOWN": posx_func(389.408, 563.410, 50.182, 91.859, 98.698, 89.033), # [수정]
+            "AFTER_RETURN": posx_func(371.852, 520.254, 207.882, 89.661, 92.225, 89.338), # [수정]
+            "AFTER_RETURN_UP": posx_func(355.186, 533.297, 400.718, 89.688, 92.114, 88.361), # [수정]
+            "FINAL_POS": posx_func(309.545, 313.500, 128.890, 89.844, 90.996, 92.951) # [수정]
         },
         "SMALL1": {
-            "PICK_DOWN": posx_func(333.096, 373.067, 138.164, 91.215, 89.984, 92.903),
+            "PICK_DOWN": posx_func(333.096, 373.067, 128.164, 91.215, 89.984, 92.903), # z 138
             "PICK_UP": posx_func(333.096, 373.067, 224.104, 91.215, 89.984, 92.903),
             "POUR_UP": posx_func(585.440, 157.760, 190.631, 91.920, 97.360, 88.550),
-            "POUR_READY": posx_func(585.440, 144.760, 160.631, 91.920, 97.360, 88.550)
+            "POUR_READY": posx_func(585.440, 144.760, 160.631, 91.920, 97.360, 88.550),
+            "FINAL_POS": posx_func(309.545, 313.500, 128.890, 89.844, 90.996, 92.951)
         },
         "SMALL2": {
             "PICK_DOWN": posx_func(217.794, 377.263, 133.564, 121.034, 93.617, 92.329),
             "PICK_UP": posx_func(216.423, 384.357, 282.484, 120.725, 94.227, 91.915),
             "POUR_UP": posx_func(585.440, 157.760, 190.631, 91.920, 97.360, 88.550),
-            "POUR_READY": posx_func(585.440, 144.760, 160.631, 91.920, 97.360, 88.550)
+            "POUR_READY": posx_func(585.440, 144.760, 160.631, 91.920, 97.360, 88.550),
+            "FINAL_POS": posx_func(309.545, 313.500, 128.890, 89.844, 90.996, 92.951)
         },
         "BEAKER": {
             "PICK_DOWN": posx_func(303.736, 81.616, 86.386, 170.495, -178.848, 167.281),
             "PICK_UP": posx_func(303.736, 81.616, 230.386, 170.495, -178.848, 167.281),
-            "RETURN_UP": posx_func(368.058, 473.059, 230.706, 19.522, 178.596, 15.563),
-            "RETURN_DOWN": posx_func(368.058, 473.059, 82.706, 19.522, 178.596, 15.563)
+            "RETURN_UP": posx_func(368.058, 423.059, 230.706, 19.522, 178.596, 15.563),
+            "RETURN_DOWN": posx_func(368.058, 423.059, 82.706, 19.522, 178.596, 15.563) # 473
         }
     }
 
@@ -277,19 +281,19 @@ def perform_task(mode, tube_type):
     def gripper_open():
         set_digital_output(2, ON)
         set_digital_output(1, OFF)
-        wait(2.0)
+        time.sleep(2.0)
 
     def gripper_large_open():
         set_digital_output(1, OFF)
         set_digital_output(2, OFF)
         set_digital_output(3, ON)
         set_digital_output(4, OFF)
-        wait(2.0)
+        time.sleep(2.0)
 
     def gripper_close():
         set_digital_output(1, ON)
         set_digital_output(2, OFF)
-        wait(2.0)
+        time.sleep(2.0)
 
     def target_gripper_open():
         if tube_type == "LARGE":
@@ -299,10 +303,10 @@ def perform_task(mode, tube_type):
 
     def _pickup_tube_common(P):
         
-        print('홈위치이동')
-        _check_stop("before movej ready")
-        custom_movej(J_READY, vel=VEL, acc=ACC)
-        wait(0.5)
+        # print('홈위치이동')
+        # _check_stop("before movej ready")
+        # custom_movej(J_READY, vel=VEL, acc=ACC)
+        # wait(0.5)
 
         _check_stop("before target_gripper_open")
         target_gripper_open()
@@ -325,11 +329,16 @@ def perform_task(mode, tube_type):
         custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
         #movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('POUR_UP 이동 중', flush=True) # [추가]
+        _check_stop("before movel POUR_UP")
+        custom_movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+
         print('POUR_READY 이동 중', flush=True) # [추가]
         _check_stop("before movel POUR_READY")
         custom_movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
         #movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+    # 의미 없음 return_beaker만 쓸 것 (controller 확인할 것)
     def pickup_beaker(P):
         _check_stop("before movej ready")
         custom_movej(J_READY, vel=VEL, acc=ACC)
@@ -371,6 +380,8 @@ def perform_task(mode, tube_type):
         _check_stop("before movel RETURN_DOWN")
         custom_movel(P["RETURN_DOWN"], vel=100, acc=100, ref=DR_BASE)
         print('리턴 다운')
+        target_gripper_open()
+        print('그리퍼 열기 완료', flush=True)
 
         print('AFTER_RETURN 이동 중', flush=True) # [추가]
         _check_stop("before movel AFTER_RETURN") # [추가]
@@ -410,9 +421,13 @@ def perform_task(mode, tube_type):
         _check_stop("before movel PICK_UP(2)")
         custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
-        print('J_READY 이동 중', flush=True) # [추가]
-        _check_stop("before movej ready")
-        custom_movej(J_READY, vel=VEL, acc=ACC)
+        # print('J_READY 이동 중', flush=True) # [추가]
+        # _check_stop("before movej ready")
+        # custom_movej(J_READY, vel=VEL, acc=ACC)
+
+        print('FINAL_POS 이동 중', flush=True) # [추가]
+        _check_stop("before movel FINAL_POS") # [추가]
+        custom_movel(P["FINAL_POS"], vel=100, acc=100, ref=DR_BASE) # [추가]
 
     def return_beaker(P):
         _check_stop("before target_gripper_open")

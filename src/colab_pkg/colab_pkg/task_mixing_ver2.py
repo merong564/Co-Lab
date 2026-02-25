@@ -55,6 +55,8 @@ class TaskMixing(Node):
         self.pos_beaker_pick_safe  = [617.838, 138.024, 226.696, 142.800, 179.222, 142.231]
         self.pos_beaker_place_safe = [406.705, 111.093, 203.088, 3.086, 178.554, -0.335]
         self.pos_beaker_place      = [303.736, 81.616, 86.386, 170.495, -178.848, 167.281]
+        self.pos_beaker_place_up   = [303.736, 81.616, 186.386, 170.495, -178.848, 167.281]
+
 
         self.pos_mixer_pick        = [87.752, 443.877, 236.217, 114.003, 179.135, 113.295]
         self.pos_mixer_pick_safe   = [87.752, 190.136, 236.217, 114.003, 179.135, 113.295]
@@ -214,7 +216,7 @@ class TaskMixing(Node):
             movel(posx(self.pos_beaker_place_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             movel(posx(self.pos_beaker_place), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             gripper_open()
-            movel(posx(self.pos_beaker_place_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
+            movel(posx(self.pos_beaker_place_up), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             log("비커 이동 작업 완료")
 
         def pick_and_ready_mixer():
@@ -294,10 +296,10 @@ class TaskMixing(Node):
         # =========================
         # 전체 흐름 제어
         # =========================
-        #pick_and_place_beaker()
+        pick_and_place_beaker()
 
-        #pick_and_ready_mixer()
-        #wait(0.2)
+        pick_and_ready_mixer()
+        wait(0.2)
 
         # 액체 혼합 (외력 없이, 베이스 기준 위아래 move_periodic)
         mixer_descend_and_wiggle(end_pos_list=self.pos_mixer_mix_down)
@@ -313,7 +315,8 @@ class TaskMixing(Node):
 
         return_mixer()
 
-        movej(posj(self.pos_home), vel=J_VEL, acc=J_ACC)
+        # movej(posj(self.pos_home), vel=J_VEL, acc=J_ACC)
+        movel(posx(303.736, 81.616, 230.386, 170.495, -178.848, 167.281),vel=L_VEL, acc=L_ACC, ref=DR_BASE)
         wait(0.2)
 
         log("Task 완료")
