@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Lab UI - v04 (Graph Fix)</title>
+    <title>Smart Lab UI - v05 (DB Analytics)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -146,11 +146,11 @@
                     
                     <div class="row mt-3 pt-3 border-top text-center bg-light rounded mx-1 pb-2">
                         <div class="col-3 border-end">
-                            <small class="text-muted d-block" style="font-size:0.75rem">작업 횟수</small>
+                            <small class="text-muted d-block" style="font-size:0.75rem">작업 횟수 (DB 누적)</small>
                             <span class="fw-bold"><span id="success_count">0</span> / <span id="total_count">0</span></span>
                         </div>
                         <div class="col-3 border-end">
-                            <small class="text-muted d-block" style="font-size:0.75rem">성공률 <span class="tolerance-badge">&plusmn;10%</span></small>
+                            <small class="text-muted d-block" style="font-size:0.75rem">레시피 성공률 <span class="tolerance-badge">&plusmn;10%</span></small>
                             <span class="fw-bold text-success"><span id="success_rate">0</span>%</span>
                         </div>
                         <div class="col-3 border-end">
@@ -158,7 +158,7 @@
                             <span class="fw-bold text-danger"><span id="error_rate">0.0</span>%</span>
                         </div>
                         <div class="col-3">
-                            <small class="text-muted d-block" style="font-size:0.75rem">사이클 타임</small>
+                            <small class="text-muted d-block" style="font-size:0.75rem">최근 사이클 타임</small>
                             <span class="fw-bold text-primary"><span id="last_cycle_time">0.0</span>s</span>
                         </div>
                     </div>
@@ -171,13 +171,12 @@
                                     <th>목표(재료)</th>
                                     <th>결과(오차g)</th>
                                     <th>오차율</th>
-                                    <th>성공률 <span class="tolerance-badge" style="font-size: 0.55rem;">&plusmn;10%</span></th>
                                     <th>사이클 타임</th>
-                                    <th>판정</th>
+                                    <th>최종 판정</th>
                                 </tr>
                             </thead>
                             <tbody id="history-tbody">
-                                <tr><td colspan="7" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>
+                                <tr><td colspan="6" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -350,7 +349,6 @@
         lastUpdateTimestamp = Date.now();
         updateConnectionStatus('online', 'Autonomous');
 
-        // 💡 [수정] 함수를 종료하지 않고 변수에 0.0을 담아 그래프 그리는 곳까지 통과시킵니다.
         let displayWeight = 0.0;
         let flowRate = 0.0;
         const currentTime = Date.now();
@@ -361,8 +359,6 @@
             
             accumulatedOffset = 0; 
             lastRawWeight = 0; 
-            
-            // displayWeight와 flowRate는 위에서 선언한 0.0으로 유지됨
         } else {
             const rawWeight = parseFloat(d.weight || 0);
 
@@ -383,11 +379,8 @@
             document.getElementById('current_flow').innerText = flowRate.toFixed(1);
         }
 
-        // 💡 [핵심] 이제 Mixing 상태여도 여기까지 코드가 내려와서 0.0g을 그래프에 꽂아 넣습니다!
         if (isRunning) {
             let elapsedTime = ((currentTime - startTime) / 1000).toFixed(1);
-            document.getElementById('last_cycle_time').innerText = elapsedTime; 
-
             experimentData.push({
                 time: elapsedTime,
                 weight: displayWeight.toFixed(2),
@@ -401,7 +394,6 @@
         }
         combinedChart.data.labels.push(new Date().toLocaleTimeString());
         
-        // 그래프 데이터 푸시!
         combinedChart.data.datasets[0].data.push(displayWeight);
         combinedChart.data.datasets[1].data.push(flowRate);
         combinedChart.update('none');
@@ -426,19 +418,8 @@
         }
 
         if(stats.phase) updatePhaseDisplay(stats.phase);
-
-        if(stats.total_count !== undefined) document.getElementById('total_count').innerText = stats.total_count;
-        if(stats.success_count !== undefined) document.getElementById('success_count').innerText = stats.success_count;
         
-        if(stats.total_count > 0) {
-            document.getElementById('success_rate').innerText = ((stats.success_count / stats.total_count) * 100).toFixed(0);
-        }
-        
-        if(stats.error_rate !== undefined) document.getElementById('error_rate').innerText = stats.error_rate;
-        
-        if(stats.last_cycle_time !== undefined && !isRunning) { 
-            document.getElementById('last_cycle_time').innerText = stats.last_cycle_time;
-        }
+        // 💡 [수정] 통계 연산 제거: system_stats.total_count 등에 의존하던 코드 삭제 (아래 experiment_history에서 통합 처리)
     });
 
     database.ref('robot_status').on('value', (snapshot) => {
@@ -459,19 +440,62 @@
         }
     });
 
+    // 💡 [핵심 추가] 순수 DB(experiment_history) 기반 통계 및 테이블 렌더링 로직
     database.ref('experiment_history').on('value', (snapshot) => {
         const tbody = document.getElementById('history-tbody');
         if (!snapshot.exists()) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>';
+            // 데이터가 없으면 통계 패널 0으로 초기화
+            document.getElementById('total_count').innerText = "0";
+            document.getElementById('success_count').innerText = "0";
+            document.getElementById('success_rate').innerText = "0";
+            document.getElementById('error_rate').innerText = "0.0";
             return;
         }
 
         tbody.innerHTML = ''; 
         let records = [];
+        let calcTotalCount = 0;
+        let calcSuccessCount = 0;
+        let sumErrorRate = 0.0;
+
         snapshot.forEach((child) => {
-            records.push(child.val());
+            const data = child.val();
+            records.push(data);
+            
+            // 💡 [수정 1] DB 누적 통계 연산
+            calcTotalCount++;
+            if (data.success === true) { 
+                calcSuccessCount++; 
+            }
+            
+            // 💡 [수정 3] 평균 오차율 연산을 위한 합산 (안전한 파싱)
+            let err = parseFloat(data.error_rate) || 0.0;
+            // 파이썬 측에서 error_rate가 누락되었다면 수동으로 계산 방어
+            if (err === 0.0 && data.ss_error_g !== undefined && data.target_weight > 0) {
+                err = (data.ss_error_g / data.target_weight) * 100;
+            }
+            sumErrorRate += err;
         });
         
+        // 📊 계산된 통계를 UI에 반영
+        document.getElementById('total_count').innerText = calcTotalCount;
+        document.getElementById('success_count').innerText = calcSuccessCount;
+        
+        // 💡 [수정 2] 레시피 기준 절대 성공률 계산
+        let dbSuccessRate = calcTotalCount > 0 ? ((calcSuccessCount / calcTotalCount) * 100).toFixed(0) : 0;
+        document.getElementById('success_rate').innerText = dbSuccessRate;
+        
+        // 역대 평균 오차율 계산
+        let dbAvgError = calcTotalCount > 0 ? (sumErrorRate / calcTotalCount).toFixed(2) : "0.0";
+        document.getElementById('error_rate').innerText = dbAvgError;
+
+        // 가장 최근 실험의 사이클 타임을 UI 상단 패널에 업데이트 (진행 중이 아닐 때만)
+        if(records.length > 0 && !isRunning) {
+             document.getElementById('last_cycle_time').innerText = records[records.length - 1].cycle_time;
+        }
+        
+        // 테이블 행 생성
         for(let i = records.length - 1; i >= 0; i--) {
             const data = records[i];
             const tr = document.createElement('tr');
@@ -480,21 +504,18 @@
                 ? '<span class="badge bg-success">성공</span>' 
                 : '<span class="badge bg-danger">실패</span>';
                 
-            const successRate = data.success_rate !== undefined ? data.success_rate : (data.success ? 100 : 0);
-            
             const materialStr = data.material !== undefined ? data.material : '-';
             const ssError = data.ss_error_g !== undefined ? data.ss_error_g : '-';
             const cycle = data.cycle_time !== undefined ? data.cycle_time : '-';
             
-            const errorClass = data.error_rate <= 10.0 ? 'text-success' : 'text-danger';
-            const successRateClass = successRate === 100 ? 'text-success' : 'text-danger';
+            let displayErrorRate = data.error_rate !== undefined ? data.error_rate : ((data.ss_error_g / data.target_weight) * 100).toFixed(2);
+            const errorClass = data.success === true ? 'text-success' : 'text-danger';
 
             tr.innerHTML = 
                 "<td class='fw-bold'>" + (i + 1) + "</td>" +
                 "<td>" + data.target_weight + "g<br><small class='text-muted'>" + materialStr + "</small></td>" +
                 "<td class='text-primary fw-bold'>" + data.final_weight + "g<br><small class='text-danger'>(±" + ssError + "g)</small></td>" +
-                "<td class='" + errorClass + " fw-bold'>" + data.error_rate + "%</td>" +
-                "<td class='" + successRateClass + " fw-bold'>" + successRate + "%</td>" +
+                "<td class='" + errorClass + " fw-bold'>" + displayErrorRate + "%</td>" +
                 "<td>" + cycle + "s</td>" +
                 "<td>" + successBadge + "</td>";
             
@@ -601,7 +622,6 @@
         combinedChart.update(); 
         document.getElementById('current_weight').innerText = "0.0"; 
         document.getElementById('current_flow').innerText = "0.0"; 
-        document.getElementById('last_cycle_time').innerText = "0.0"; 
     }
     
     function addLog(msg) {
