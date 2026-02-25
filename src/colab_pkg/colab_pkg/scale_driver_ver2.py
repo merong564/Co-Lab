@@ -28,20 +28,20 @@ class ScaleDriver(Node):
         self.srv_pouring = self.create_service(
             RobotCommand,
             'set_tare',
-            self.execute_pouring_callback,
+            self.set_tare_callback,
             callback_group=self.callback_group
         )
 
         # 4. 타이머 설정
         self.timer = self.create_timer(0.01, self.timer_callback, callback_group=self.callback_group)
 
-    def execute_pouring_callback(self, request, response):
+    def set_tare_callback(self, request, response):
         self.get_logger().info(f"[Service] Request Received. Connecting to Arduino for Tare...")
         
         # [추가] 이미 연결되어 있다면 닫고 새로 연결 (재부팅 유도하여 영점 조절 수행)
         if self.ser is not None and self.ser.is_open:
             self.ser.close()
-            time.sleep(0.5)
+            time.sleep(1.0)
 
         # [수정] 서비스 호출 시 시리얼 연결 수행
         try:

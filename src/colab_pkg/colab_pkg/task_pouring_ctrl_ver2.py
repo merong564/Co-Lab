@@ -164,13 +164,29 @@ class TaskPouring(Node):
 
     def stop_callback(self, msg: String):
         global STOP_REQUESTED
-        if (msg.data or "").strip().upper() != "STOP":
-            return
-
-        STOP_REQUESTED = True
-        self.get_logger().warn("[WARN] STOP received -> will return to ready pose then finish")
+        cmd = (msg.data or "").strip().upper() # [수정] 명령어 안전 처리
+        
+        # [수정] STOP 명령 수신 시 즉시 물리 모션 정지 처리
+        if cmd == "STOP":
+            STOP_REQUESTED = True
+            self.get_logger().warn("[WARN] STOP received -> stopping motion")
+            try:
+                from DSR_ROBOT2 import stop
+                stop(0)
+            except Exception:
+                pass
+        elif cmd == "RESET": # [추가]
+            STOP_REQUESTED = False # [추가]
 
     def execute_pouring_callback(self, request, response):
+        global STOP_REQUESTED # [추가]
+
+        # [추가] 서비스 시작 시 STOP이면 즉시 실패 응답
+        if STOP_REQUESTED:
+            response.success = False
+            response.message = "STOP already requested"
+            return response
+
         # [수정] 배열 형태로 전달된 targets 및 target_weights에서 값 추출
         target_w = request.target_weights[0] if request.target_weights else 0.0
         tube_type = request.targets[0].strip().upper() if request.targets else "LARGE" # [추가] 시험관 종류 추출
@@ -178,6 +194,10 @@ class TaskPouring(Node):
         self.get_logger().info(f"[Service] Request Received. Tube: {tube_type}, Target: {target_w}g")
 
         success = perform_task(self, float(target_w), tube_type) # [수정] 시험관 종류 파라미터 추가 전달
+
+        # [추가] 작업 중 STOP이 들어왔을 경우 최종적으로 실패 처리
+        if STOP_REQUESTED:
+            success = False
 
         response.success = bool(success)
         response.message = "Pouring Completed" if success else "Pouring Failed"
@@ -234,7 +254,52 @@ def calculate_tilt_angle_pd(current_w: float, target_w: float, p_gain: float, d_
 def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARGE") -> bool:
     from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait
     from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
-    
+    from DSR_ROBOT2 import amovel, check_motion # [추가]
+
+    # [추가] STOP 예외 처리 함수 정의
+    def _check_stop(tag=""):
+        global STOP_REQUESTED
+        if STOP_REQUESTED:
+            try:
+                from DSR_ROBOT2 import stop
+                stop(0)
+            except Exception:
+                pass
+            raise RuntimeError(f"STOP at: {tag}")
+            
+    _check_stop("before task start") # [추가]
+
+    # [추가] Pouring 루프용 custom_movel 및 custom_wait 정의
+    def custom_movel(*args, **kwargs):
+        while check_motion() == 1:
+            _check_stop("wait previous motion end")
+            time.sleep(0.05)
+        amovel(*args, **kwargs)
+        wait_start = time.time()
+        while check_motion() == 0 and (time.time() - wait_start) < 1.0:
+            _check_stop("wait motion start")
+            time.sleep(0.05)
+        idle_count = 0
+        while True:
+            if check_motion() == 0:
+                idle_count += 1
+            else:
+                idle_count = 0
+            if idle_count >= 3:
+                break
+            _check_stop("during movel")
+            time.sleep(0.05)
+
+    def custom_wait(wait_time):
+        start = time.time()
+        while time.time() - start < wait_time:
+            _check_stop("during wait")
+            time.sleep(0.05)
+
+    # [추가] 오버라이드
+    movel = custom_movel
+    wait = custom_wait
+
     set_robot_mode(ROBOT_MODE_MANUAL)
     set_tcp(ROBOT_TCP)
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
@@ -294,20 +359,6 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     prev_error = target_weight - float(node.current_weight)
 
     while rclpy.ok():
-        # STOP 들어오면: 자세 복귀 후 종료(노드 유지)
-        if STOP_REQUESTED:
-            try:
-                movel(pour_ready_pos, vel=150, acc=150)
-                wait(1.0)
-            except Exception as e:
-                print(f"[ERROR] Return Move Failed after STOP: {e}")
-                STOP_REQUESTED = False
-                return False
-
-            print(" [STOP] Returned to ready pose. Finishing task.")
-            STOP_REQUESTED = False
-            return True  # STOP을 '정상 종료'로 볼지 여부(원하면 False로)
-
         current_weight = float(node.current_weight)
 
         cur_t = time.time() - start_t # [추가] 현재 경과 시간 계산

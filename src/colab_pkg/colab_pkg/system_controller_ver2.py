@@ -32,6 +32,14 @@ class SystemController(Node):
             callback_group=self.callback_group
         )
 
+        self.sub_ui_stop = self.create_subscription(
+            String,
+            'stop/ui',
+            self.stop_callback,
+            10,
+            callback_group=self.callback_group
+        )
+
         # Service Server
         self.srv_start = self.create_service(
             RobotCommand,
@@ -46,7 +54,7 @@ class SystemController(Node):
         self.cli_pouring = self.create_client(RobotCommand, 'execute_pouring', callback_group=self.callback_group)
         self.cli_mixing = self.create_client(RobotCommand, 'execute_mixing', callback_group=self.callback_group)
 
-        # self.check_services_availability()
+        self.check_services_availability()
 
     def stop_callback(self, msg: String):
         """ /dsr01/stop/impact 에서 'STOP' 오면 /dsr01/stop 으로 'STOP' 재발행 """
@@ -86,9 +94,9 @@ class SystemController(Node):
             for target, weight in zip(request.targets, request.target_weights):
                 self.get_logger().info(f"[Task] Target: {target}, Target Weight: {weight}g")
 
-                # if self.check_stop(): raise Exception("Process Aborted by User")
-                # if not await self.call_service(self.cli_scale, mode="TARE"):
-                #     raise Exception("Scale Tare Failed")
+                if self.check_stop(): raise Exception("Process Aborted by User")
+                if not await self.call_service(self.cli_scale, mode="TARE"):
+                    raise Exception("Scale Tare Failed")
 
                 if self.check_stop(): raise Exception("Process Aborted by User")
                 if not await self.call_service(self.cli_transfer, mode="PICKUP", targets=[target]):

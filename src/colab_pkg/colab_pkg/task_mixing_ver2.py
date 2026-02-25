@@ -21,6 +21,8 @@ ROBOT_TCP = "GripperDA_v1"
 DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
+STOP_REQUESTED = False # [추가] STOP 상태를 저장할 전역 변수
+
 # ===============================
 # 2. 서비스 노드 클래스
 # ===============================
@@ -34,6 +36,16 @@ class TaskMixing(Node):
             RobotCommand,
             'execute_mixing',
             self.execute_mixing_callback,
+            callback_group=self.callback_group
+        )
+
+        # [추가] STOP 토픽 구독
+        from std_msgs.msg import String # [추가]
+        self.sub_stop = self.create_subscription(
+            String,
+            'stop',
+            self.stop_callback,
+            10,
             callback_group=self.callback_group
         )
 
@@ -52,6 +64,15 @@ class TaskMixing(Node):
         self.get_logger().info("TaskMixing Ready. Service: execute_mixing")
 
     def execute_mixing_callback(self, request, response):
+        global STOP_REQUESTED # [추가]
+
+        # [추가] 시작 시 STOP이면 즉시 실패 응답
+        if STOP_REQUESTED:
+            self.get_logger().info(f"##### Service Response = False ######")
+            response.success = False
+            response.message = "STOP already requested"
+            return response
+        
         mode = (getattr(request, "mode", "") or "").strip().upper()
         mixing_duration = float(getattr(request, "mixing_duration", 10.0))
 
@@ -59,6 +80,11 @@ class TaskMixing(Node):
 
         try:
             self.perform_task(mixing_duration)
+
+            # [추가] 작업 중 STOP이 들어왔을 경우 실패 처리
+            if STOP_REQUESTED:
+                raise RuntimeError("STOP requested during task")
+            
             response.success = True
             response.message = f"{mode} Mixing Completed Successfully"
         except Exception as e:
@@ -68,13 +94,93 @@ class TaskMixing(Node):
 
         return response
 
+    # [추가] STOP 콜백 함수
+    def stop_callback(self, msg):
+        global STOP_REQUESTED
+        cmd = (msg.data or "").strip().upper()
+        if cmd == "STOP":
+            STOP_REQUESTED = True
+            self.get_logger().warn("[STOP] received -> flag set (node stays alive)")
+            try:
+                from DSR_ROBOT2 import stop
+                stop(0)
+            except Exception:
+                pass
+        elif cmd == "RESET":
+            STOP_REQUESTED = False
+            self.get_logger().info("[RESET] received -> flag cleared")
+
     def perform_task(self, mixing_duration=10.0):
         from DSR_ROBOT2 import (
             movej, movel, posj, posx,
             set_digital_output, wait, set_robot_mode, ROBOT_MODE_AUTONOMOUS,
             move_periodic, get_current_posx,
-            DR_BASE, DR_TOOL
+            DR_BASE, DR_TOOL,
+            amovel, amovej, check_motion # [추가] 비동기 함수 임포트
         )
+
+        global STOP_REQUESTED # [추가]
+
+        # [추가] STOP 확인 및 예외 발생
+        def _check_stop(tag=""):
+            global STOP_REQUESTED
+            if STOP_REQUESTED:
+                print(f'stop 요청 들어옴 at: {tag}')
+                try:
+                    from DSR_ROBOT2 import stop
+                    stop(0)
+                except Exception:
+                    pass
+                raise RuntimeError(f"STOP at: {tag}")
+
+        _check_stop("before task start") # [추가] 시작 시점 확인
+
+        # [추가] 모션 및 대기 중 STOP 플래그를 실시간 감시하는 커스텀 함수
+        def custom_movel(*args, **kwargs):
+            while check_motion() == 1:
+                print('이전 모션 중', flush=True)
+                _check_stop("wait previous motion end")
+                time.sleep(0.05)
+            amovel(*args, **kwargs)
+            wait_start = time.time()
+            while check_motion() == 0 and (time.time() - wait_start) < 1.0:
+                print('movel 모션 중인데 안 움직이는 중', flush=True)
+                _check_stop("wait motion start")
+                time.sleep(0.05)
+            idle_count = 0
+            while True:
+                if check_motion() == 0:
+                    idle_count += 1
+                else:
+                    idle_count = 0
+                if idle_count >= 3:
+                    break
+                _check_stop("during movel")
+                time.sleep(0.05)
+
+        def custom_movej(*args, **kwargs):
+            while check_motion() == 1:
+                _check_stop("wait previous motion end")
+                time.sleep(0.05)
+            amovej(*args, **kwargs)
+            wait_start = time.time()
+            while check_motion() == 0 and (time.time() - wait_start) < 1.0:
+                _check_stop("wait motion start")
+                time.sleep(0.05)
+            while check_motion() == 1:
+                _check_stop("during movej")
+                time.sleep(0.05)
+
+        def custom_wait(wait_time):
+            start = time.time()
+            while time.time() - start < wait_time:
+                _check_stop("during wait")
+                time.sleep(0.05)
+
+        # [추가] 기존 블로킹 함수들을 커스텀 함수로 덮어씌움
+        movel = custom_movel
+        movej = custom_movej
+        wait = custom_wait
 
         def log(msg: str):
             self.get_logger().info(msg)
@@ -188,10 +294,10 @@ class TaskMixing(Node):
         # =========================
         # 전체 흐름 제어
         # =========================
-        pick_and_place_beaker()
+        #pick_and_place_beaker()
 
-        pick_and_ready_mixer()
-        wait(0.2)
+        #pick_and_ready_mixer()
+        #wait(0.2)
 
         # 액체 혼합 (외력 없이, 베이스 기준 위아래 move_periodic)
         mixer_descend_and_wiggle(end_pos_list=self.pos_mixer_mix_down)
