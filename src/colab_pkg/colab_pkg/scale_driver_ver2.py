@@ -15,46 +15,28 @@ class ScaleDriver(Node):
         
         self.callback_group = ReentrantCallbackGroup()
         
-        # 1. 설정 변수
         self.port = '/dev/ttyACM0'
         self.baudrate = 115200
         self.is_active = False
         self.ser = None 
         
-        # 💡 [캘리브레이션 보정 계수] 
-        # 하드웨어 로드셀의 물리적 오차를 소프트웨어로 교정하는 비율
-        # (실제 올려둔 무게 / 화면에 찍히는 무게)
         self.cal_ratio = 190.0 / 187.8  
         
-        # 💡 [초정밀 필터링 설정]
-        # [1단계: 반응 속도] 지수 이동 평균(LPF) 계수 (현재 : 0.1)
-        # 새로 측정된 센서 값을 얼마나 믿을 것인지 결정 (0.0 ~ 1.0)
-        # 값이 클수록(예: 0.5) 빠르게 반응하지만 노이즈도 많아짐,
-        # 값이 작을수록(예: 0.1) 부드럽지만 반응이 느려짐
-        self.lpf_alpha = 0.35            
+        # 💡 [적응형 필터 설정] lpf_alpha 변수가 사라지고 동적으로 계산됩니다.
         self.filtered_weight = None     
         self.published_weight = 0.0     
         
-        # 💡 [2단계: 노이즈 방패] 동적 데드밴드 / 히스테리시스 (현재: 0.3g)
-        # 이전에 확정된 무게와 비교해서, 이 수치보다 큰 변화가 있어야만 새로운 무게로 인정한다.
-        # 즉, 처음에 액체가 0.1g, 0.2g 떨어지는 것은 화면에 반영되지 않고 버려진다.
-        self.noise_window = 0.1
-
-        # 💡 [3단계: 절대 영점 잠금] (현재: 0.2g)       
-        # 시스템 초기화 시 빈 비커의 미세한 흔들림을 잡기 위해, 0.2g 이하의 값은 무조건 0.0g으로 강제 고정합니다.
-        self.zero_deadband = 0.25
+        # 💡 계단 현상 방지: 0.05g 이상의 미세한 변화도 물 흐르듯 통과시킵니다.
+        self.noise_window = 0.05         
         
-        # 🚀 [4단계: 고체 점프 감지] (현재: 5.0g)
-        # 물을 붓는 게 아니라 고체(예: 폰 190g)를 갑자기 턱! 올렸을 때, 
-        # LPF 필터를 거치지 않고 단숨에 계단식으로 값을 띄워버리는 기준선입니다.
-        self.jump_threshold = 5.0       
+        # 💡 영점 유령 데이터 철벽 방어: 초기 0.55g 이하의 노이즈는 무조건 0으로 묶습니다.
+        self.zero_deadband = 0.55        
         
+        self.jump_threshold = 10.0       
         self.last_printed_weight = None
         
-        # 2. 퍼블리셔 생성
         self.publisher_ = self.create_publisher(Float32, 'load_cell/weight', 10)
         
-        # 3. 서비스 서버 생성
         self.srv_pouring = self.create_service(
             RobotCommand,
             'set_tare',
@@ -62,7 +44,6 @@ class ScaleDriver(Node):
             callback_group=self.callback_group
         )
 
-        # 4. 타이머 설정
         self.timer = self.create_timer(0.01, self.timer_callback, callback_group=self.callback_group)
 
     def execute_pouring_callback(self, request, response):
@@ -102,40 +83,47 @@ class ScaleDriver(Node):
                     try:
                         raw_weight = float(line) * self.cal_ratio
                         
-                        # ====================================================
-                        # 💡 [1단계] 점프 감지 + Low Pass Filter
-                        # ====================================================
                         if self.filtered_weight is None:
                             self.filtered_weight = raw_weight
                         else:
-                            # 🚀 원본 값과 필터값의 차이가 너무 크면(고체를 올리거나 뺐을 때)
-                            if abs(raw_weight - self.filtered_weight) > self.jump_threshold:
-                                self.filtered_weight = raw_weight  # 지연 없이 즉시 계단식 점프!
+                            # 🚀 [핵심] 찰나의 순간 변화량(instant_diff) 측정
+                            instant_diff = abs(raw_weight - self.filtered_weight)
+                            
+                            # 🧠 적응형 알파(Adaptive Alpha) 지능형 판단 로직
+                            if instant_diff > self.jump_threshold:
+                                # 1. 고체 타격 (10g 이상): 딜레이 0초, 필터 없이 100% 즉각 반영
+                                current_alpha = 1.0  
+                            elif instant_diff > 0.4:
+                                # 2. 액체 쾌속 투입 (0.4g 이상 변화): 딜레이 최소화 최우선!
+                                # 알파를 0.8로 대폭 끌어올려 0.1초의 지연도 없이 PD 제어기에 값을 꽂아 넣습니다.
+                                current_alpha = 0.8  
+                            elif instant_diff > 0.1:
+                                # 3. 액체 미세 투입 (0.1g 이상 변화): 딜레이와 노이즈의 완벽한 타협점
+                                current_alpha = 0.3  
                             else:
-                                # 평소(물 붓기, 미세 진동)에는 부드럽게 필터 적용
-                                self.filtered_weight = (self.lpf_alpha * raw_weight) + ((1.0 - self.lpf_alpha) * self.filtered_weight)
+                                # 4. 정지 상태 (노이즈 구간): 지연은 상관없으니 숫자를 바위처럼 고정!
+                                # 알파를 0.05로 짓눌러서 0.5g짜리 파도도 잔잔하게 만들어 버립니다.
+                                current_alpha = 0.05 
+
+                            # 결정된 알파 값으로 필터링 적용 (current_alpha가 계속 변함)
+                            self.filtered_weight = (current_alpha * raw_weight) + ((1.0 - current_alpha) * self.filtered_weight)
                         
-                        # [2단계] 소수점 3째 자리까지만 반올림
                         precise_weight = round(self.filtered_weight, 3)
                         
-                        # [3단계] Hysteresis (동적 데드밴드) 
                         diff = abs(precise_weight - self.published_weight)
                         if diff > self.noise_window:
                             self.published_weight = precise_weight
                             
-                        # [4단계] 절대 영점 락
                         if abs(self.published_weight) <= self.zero_deadband:
                             self.published_weight = 0.0
 
-                        # [5단계] 마이너스 값 원천 차단
                         if self.published_weight < 0.0:
                             self.published_weight = 0.0
 
                         if self.published_weight != self.last_printed_weight:
-                            self.get_logger().info(f"⚖️ [현재 확정 무게]: {self.published_weight:.3f} g")
+                            self.get_logger().info(f"⚖️ [현재 확정 무게]: {self.published_weight:.3f} g (알파 자동 조절 중)")
                             self.last_printed_weight = self.published_weight
 
-                        # 퍼블리시
                         msg = Float32()
                         msg.data = self.published_weight 
                         self.publisher_.publish(msg)
