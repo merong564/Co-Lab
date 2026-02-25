@@ -252,7 +252,7 @@ class TaskMixing(Node):
         # ✅ 위로(올릴 때)는 천천히 / 아래로(털려고 내릴 때)는 빠르게
         def shake_off_before_return(
             lift_mm=70.0,
-            tap_mm=50.0,
+            tap_mm=60.0, # 50
             tap_count=12,
             up_vel=60, up_acc=60,        # 위로 갈 때(천천히)
             down_vel=600, down_acc=900,  # 아래로 갈 때(빠르게)
@@ -308,18 +308,18 @@ class TaskMixing(Node):
         # =========================
         # 전체 흐름 제어
         # =========================
-        pick_and_place_beaker()
+        # pick_and_place_beaker()
 
-        pick_and_ready_mixer()
-        wait(0.2)
+        # pick_and_ready_mixer()
+        # wait(0.2)
 
         # 액체 혼합 (외력 없이, 베이스 기준 위아래 move_periodic)
         mixer_descend_and_wiggle(end_pos_list=self.pos_mixer_mix_down)
 
         # ✅ 위로는 천천히 / 아래로는 빠르게 (탁탁)
         shake_off_before_return(
-            lift_mm=70.0,
-            tap_mm=25.0,
+            lift_mm=30.0,
+            tap_mm=60.0,
             tap_count=12,
             up_vel=60, up_acc=60,
             down_vel=600, down_acc=900
