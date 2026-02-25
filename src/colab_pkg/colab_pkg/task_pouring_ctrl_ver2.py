@@ -162,13 +162,29 @@ class TaskPouring(Node):
             callback_group=self.callback_group,
         )
 
-    def stop_callback(self, msg: String):
-        global STOP_REQUESTED
-        if (msg.data or "").strip().upper() != "STOP":
-            return
+    # def stop_callback(self, msg: String):
+    #     global STOP_REQUESTED
+    #     if (msg.data or "").strip().upper() != "STOP":
+    #         return
 
-        STOP_REQUESTED = True
-        self.get_logger().warn("[WARN] STOP received -> will return to ready pose then finish")
+    #     STOP_REQUESTED = True
+    #     self.get_logger().warn("[WARN] STOP received -> will return to ready pose then finish")
+
+    def stop_callback(self, msg: String):
+            global STOP_REQUESTED
+            cmd = (msg.data or "").strip().upper()
+
+            if cmd == "STOP":
+                STOP_REQUESTED = True
+                self.get_logger().warn("[STOP] received -> flag set (node stays alive)")
+
+                # from DSR_ROBOT2 import stop, DR_QSTOP
+                # stop(0)
+                # self.get_logger().warn("[STOP] Robot stop() called (DR_QSTOP)")
+
+            elif cmd == "RESET":
+                STOP_REQUESTED = False
+                self.get_logger().info("[RESET] received -> flag cleared")
 
     def execute_pouring_callback(self, request, response):
         # [수정] 배열 형태로 전달된 targets 및 target_weights에서 값 추출
@@ -226,7 +242,7 @@ def calculate_tilt_angle_pd(current_w: float, target_w: float, p_gain: float, d_
     return float(delta_angle), float(error) # [추가]
 
 def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARGE") -> bool:
-    from DSR_ROBOT2 import movej, get_current_posj, movel, posx, wait
+    from DSR_ROBOT2 import movej, get_current_posj, amovel, movel, check_motion, posx, wait
     from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
     
     set_robot_mode(ROBOT_MODE_MANUAL)
@@ -237,6 +253,37 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     global STOP_REQUESTED
     global P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD # [추가] 전역 변수 선언
     global prev_error
+
+    # [추가] amovel, amovej, check_motion 임포트 (DSR_ROBOT2)
+    def _check_stop(tag=""):
+        global STOP_REQUESTED
+        if STOP_REQUESTED:
+            raise RuntimeError(f"STOP at: {tag}")
+
+    def custom_movel(*args, **kwargs):
+            while check_motion() == 1:
+                print('이전 모션 중', flush=True)
+                _check_stop("wait previous motion end")
+                time.sleep(0.05)
+            amovel(*args, **kwargs)
+            wait_start = time.time()
+            while check_motion() == 0 and (time.time() - wait_start) < 1.0:
+                print('movel 모션 중인데 안 움직이는 중', flush=True)
+                _check_stop("wait motion start")
+                time.sleep(0.05)
+            idle_count = 0
+            while True:
+                if check_motion() == 0:
+                    idle_count += 1
+                else:
+                    idle_count = 0
+                if idle_count >= 3:
+                    break
+                _check_stop("during movel")
+                time.sleep(0.05)
+
+    # [추가] movej, wait도 동일하게 커스텀 함수 작성 후 덮어쓰기
+    movel = custom_movel
 
     # [추가] 정의되지 않은 시험관 입력 시 예외 처리 및 작업 중단
     if tube_type not in TUBE_TUNING:

@@ -32,6 +32,7 @@ DR_init.__dsr__model = ROBOT_MODEL
 #  - STOP 플래그는 RESET에서만 해제 (서비스 시작에서 지우지 않음)
 # ===============================
 STOP_REQUESTED = False
+HELD_OBJECT = ""
 
 
 class TaskTransfer(Node):
@@ -67,28 +68,28 @@ class TaskTransfer(Node):
             self.get_logger().warn("[STOP] received -> flag set (node stays alive)")
 
             # 가능하면 즉시 모션 정지 시도
-            try:
-                from DSR_ROBOT2 import stop, DR_QSTOP
-                stop(0)
-                # stop(DR_QSTOP)
-                # stop(0)
-                self.get_logger().warn("[STOP] Robot stop() called (DR_QSTOP)")
-            except Exception:
-                try:
-                    from DSR_ROBOT2 import stop, DR_SSTOP
-                    stop(0)
-                    # stop(DR_SSTOP)
-                    # stop(2)
-                    self.get_logger().warn("[STOP] Robot stop() called (DR_SSTOP)")
-                except Exception:
-                    pass
+            # try:
+            #     from DSR_ROBOT2 import stop, DR_QSTOP
+            #     stop(0)
+            #     # stop(DR_QSTOP)
+            #     # stop(0)
+            #     self.get_logger().warn("[STOP] Robot stop() called (DR_QSTOP)")
+            # except Exception:
+            #     try:
+            #         from DSR_ROBOT2 import stop, DR_SSTOP
+            #         stop(0)
+            #         # stop(DR_SSTOP)
+            #         # stop(2)
+            #         self.get_logger().warn("[STOP] Robot stop() called (DR_SSTOP)")
+            #     except Exception:
+            #         pass
 
         elif cmd == "RESET":
             STOP_REQUESTED = False
             self.get_logger().info("[RESET] received -> flag cleared")
 
     def execute_transfer_callback(self, request, response):
-        global STOP_REQUESTED
+        global STOP_REQUESTED, HELD_OBJECT
 
         # ✅ 서비스 시작 시 STOP이면 즉시 실패 응답 (플래그 지우지 않음)
         if STOP_REQUESTED:
@@ -96,6 +97,7 @@ class TaskTransfer(Node):
 
             response.success = False
             response.message = "STOP already requested"
+            response.held_object = HELD_OBJECT # [추가]
             return response
 
         mode = (getattr(request, "mode", "") or "").strip().upper()
@@ -114,9 +116,11 @@ class TaskTransfer(Node):
 
             response.success = True
             response.message = f"{mode} Completed"
+            response.held_object = HELD_OBJECT
         except Exception as e:
             response.success = False
             response.message = str(e)
+            response.held_object = HELD_OBJECT
 
         return response
 
@@ -186,7 +190,7 @@ def perform_task(mode, tube_type):
       - 작업 진행 중에도 _check_stop()로 계속 감지
       - STOP이면 RuntimeError -> 서비스 콜백에서 success=False 응답
     """
-    global STOP_REQUESTED
+    global STOP_REQUESTED, HELD_OBJECT
 
     # [추가] amovel, amovej, check_motion 임포트
     from DSR_ROBOT2 import movej, movel, amovel, amovej, check_motion, posx, wait, set_digital_output, DR_BASE
@@ -279,6 +283,7 @@ def perform_task(mode, tube_type):
     ON, OFF = 1, 0
 
     def gripper_open():
+        global HELD_OBJECT # [추가]
         # ✅ large 라인 잔류 방지
         set_digital_output(3, OFF)
         set_digital_output(4, OFF)
@@ -286,15 +291,19 @@ def perform_task(mode, tube_type):
         set_digital_output(2, ON)
         set_digital_output(1, OFF)
         time.sleep(2.0)
+        HELD_OBJECT = "" # [추가]
 
     def gripper_large_open():
+        global HELD_OBJECT # [추가]
         set_digital_output(1, OFF)
         set_digital_output(2, OFF)
         set_digital_output(3, ON)
         set_digital_output(4, OFF)
         time.sleep(2.0)
+        HELD_OBJECT = "" # [추가]
 
     def gripper_close():
+        global HELD_OBJECT # [추가]
         # ✅ large 라인 잔류 방지
         set_digital_output(3, OFF)
         set_digital_output(4, OFF)
@@ -302,6 +311,8 @@ def perform_task(mode, tube_type):
         set_digital_output(1, ON)
         set_digital_output(2, OFF)
         time.sleep(2.0)
+        HELD_OBJECT = tube_type # [추가] 잡고 있는 타겟 명시
+
 
     def target_gripper_open():
         if tube_type == "LARGE":
