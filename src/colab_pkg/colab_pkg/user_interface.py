@@ -1,15 +1,10 @@
-### 2. `user_interface.py` (백엔드 업데이트)
-'''`weight_callback` 함수에서 `phase`를 검사하여 `Mixing`이나 `Return` 상태일 때는 아예 노드 레벨에서 무게 데이터를 차단(0.0g)하도록 수정했습니다. 
-또한, `start_process`로 보낼 때 문자열 매칭(정규식)도 '에탄올/아세톤/물'에 맞게 업데이트했습니다.
-
-```python'''
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260225_v05 (Chemical Recipe & Phase Force Shield)
+[Version] 260226_v07 (Strict Core Preservation + Phase Force Shield)
 """
 
 import rclpy
@@ -43,7 +38,7 @@ class UserInterface(Node):
             cred = credentials.Certificate("/home/rokey/Co-Lab/serviceAccountKey.json")
             if not firebase_admin._apps:
                 firebase_admin.initialize_app(cred, {
-                    'databaseURL': '[https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app](https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app)'
+                    'databaseURL': 'https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app'
                 })
             self.get_logger().info("🔥 Firebase Connected!")
             db.reference('commands').set({}) 
@@ -71,6 +66,9 @@ class UserInterface(Node):
         self.last_total_count = 0 
         self.is_first_msg = True 
 
+        # 💡 [추가 기능 1] 무게 토픽을 완전히 잠가버리는 영구 차단 플래그
+        self.is_weight_blocked = False
+
     def loop_callback(self):
         self.check_firebase_commands()
         self.upload_to_firebase()
@@ -88,6 +86,9 @@ class UserInterface(Node):
                     if cmd_type == 'start_pouring':
                         ui_time = cmd_data.get('timestamp', 0)
                         self.get_logger().info(f'▶ 작업 시작(Start) 신호 수신됨 (UI 클릭 시간: {ui_time})')
+                        
+                        # 💡 [추가] 새 작업 시작 시 차단 스위치 해제
+                        self.is_weight_blocked = False
 
                         self.current_target_weight = float(cmd_data.get('target_weight', 0.0))
                         self.current_material = cmd_data.get('material', 'Unknown')
@@ -98,7 +99,9 @@ class UserInterface(Node):
                         self.get_logger().warn("🚨 EMERGENCY STOP Signal Sent!")
                     
                     elif cmd_type == 'tare':
-                         self.get_logger().info("⚖️ Tare Command Received")
+                         # 💡 [추가] 영점 조절 시 차단 스위치 해제
+                         self.is_weight_blocked = False
+                         self.get_logger().info("⚖️ Tare Command Received (Weight Block Released)")
 
         except Exception as e:
             self.get_logger().error(f"Command Check Error: {e}")
@@ -111,11 +114,10 @@ class UserInterface(Node):
         req = RobotCommand.Request()
         req.mode = "FULL"
         
-        # 💡 [핵심 수정] 에탄올, 아세톤, 물 포맷에 맞춰 정규표현식 변경!
+        # 💡 [추가 기능 2] 에탄올, 아세톤, 물 포맷에 맞춰 정규표현식 변경 (기존 로직 유지)
         match = re.search(r'에탄올(\d+(\.\d+)?)/아세톤(\d+(\.\d+)?)/물(\d+(\.\d+)?)', self.current_material)
         if match:
             req.targets = ["LARGE", "SMALL1", "SMALL2"]
-            # match.group(5) = 물, match.group(1) = 에탄올, match.group(3) = 아세톤
             req.target_weights = [float(match.group(5)), float(match.group(1)), float(match.group(3))]
         else:
             req.targets = ["LARGE"]
@@ -222,7 +224,8 @@ class UserInterface(Node):
             }
             
             db_ref = db.reference('control_metrics_history')
-            new_record = db_ref.push(metrics_data)
+            # 💡 [오류 수정] 이전 코드의 push() NameError를 방지하기 위해 db_ref.push()로 수정 유지
+            new_record = db_ref.push(metrics_data) 
             
             self.get_logger().info(f"📊 [제어 지표 DB 저장 완료] Pour Speed & Error Rate 포함됨. ID: {new_record.key}")
 
@@ -233,16 +236,22 @@ class UserInterface(Node):
             self.get_logger().error(f"❌ DB 제어 지표 저장 실패: {e}")
 
     def joint_callback(self, msg): 
+        # 💡 [오류 수정] 문법 에러(for msg.position) 방지를 위해 rad in msg.position 유지
         self.latest_joints = [math.degrees(rad) for rad in msg.position]
         self.last_joint_time = time.time()
 
     def weight_callback(self, msg): 
-        # 💡 [핵심 방어 로직] 3번의 붓기가 다 끝나고 섞기(Mixing)로 넘어갈 때 무게 토픽을 무시합니다.
-        current_phase = self.latest_system_status.get('phase', 'Ready')
+        # 💡 [추가 기능 연동] 대소문자 관계없이 완벽 인식
+        current_phase = self.latest_system_status.get('phase', 'Ready').lower()
         
-        if current_phase in ["Mixing", "Return"]:
+        # 믹싱 및 복귀 단계에 진입하면 '영구 차단 스위치'를 켭니다.
+        if current_phase in ["mixing", "return"]:
+            self.is_weight_blocked = True
+            
+        # 🛡️ [핵심 방어 로직] 차단 스위치가 켜져 있으면 데이터 무시하고 0.0 전달
+        if self.is_weight_blocked:
             self.latest_weight = 0.0
-            # 콘솔이 너무 지저분해지지 않도록 로깅은 생략합니다.
+            # 차단 모드에서는 로그도 띄우지 않고 가짜 신호를 완벽히 무시합니다.
         else:
             self.latest_weight = float(msg.data)
             self.get_logger().info(f"📡 [UI 브릿지 수신]: {self.latest_weight:.1f} g")
