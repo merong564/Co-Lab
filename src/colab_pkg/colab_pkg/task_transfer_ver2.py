@@ -129,9 +129,7 @@ def get_poses(posx_func):
         "LARGE": {
             "PICK_DOWN": posx_func(297.499, -60.308, 68.716, 88.614, 96.211, 91.805), # [수정]
             "PICK_UP":   posx_func(287.293, -47.214, 222.645, 88.718, 96.254, 91.727), # [수정]
-            # "POUR_UP": posx_func(585.440, 384.931, 242.631, 91.920, 97.360, 88.550), # [수정]
             "POUR_READY": posx_func(561.045, 144.760, 188.965, 91.920, 97.358, 88.558), # [수정]
-            # RETURN_READY는 새 흐름에서 사용되지 않으므로 제거 또는 무시 가능
             "RETURN_UP": posx_func(398.040, 351.050, 326.608, 90.329, 93.577, 89.530), # [수정]
             "RETURN_DOWN": posx_func(389.408, 563.410, 72.182, 91.859, 98.698, 89.033), # [수정]
             "AFTER_RETURN": posx_func(371.852, 520.254, 220.882, 89.661, 92.225, 89.338), # [수정]
@@ -227,7 +225,7 @@ def perform_task(mode, tube_type):
         # [추가] 일시적인 상태값 0 반환으로 인한 조기 종료 방지
         idle_count = 0 # [추가]
         while True: # [추가] 기존 while check_motion() == 1: 대체
-            print('movel 모션 중', flush=True)
+            #print('movel 모션 중', flush=True)
             if check_motion() == 0: # [추가]
                 idle_count += 1 # [추가]
             else: # [추가]
@@ -309,134 +307,150 @@ def perform_task(mode, tube_type):
         _check_stop("before target_gripper_open")
         target_gripper_open()
 
+        print('PICK_UP 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_UP")
-        #custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        #movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('PICK_DOWN 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_DOWN")
-        #custom_movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
-        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        #movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before gripper_close")
         gripper_close()
 
+        print('PICK_UP(2) 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_UP(2)")
-        # custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        #movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
-        #_check_stop("before movel POUR_UP")
-        #custom_movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-
+        print('POUR_READY 이동 중', flush=True) # [추가]
         _check_stop("before movel POUR_READY")
-        # custom_movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
-        movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+        #movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
 
     def pickup_beaker(P):
         _check_stop("before movej ready")
-        movej(J_READY, vel=VEL, acc=ACC)
+        custom_movej(J_READY, vel=VEL, acc=ACC)
         wait(0.5)
 
         _check_stop("before target_gripper_open")
         target_gripper_open()
 
+        print('PICK_UP 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_UP")
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('PICK_DOWN 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_DOWN")
-        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before gripper_close")
         gripper_close()
 
+        print('PICK_UP(2) 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_UP(2)")
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
     def return_large(P):
-        # _check_stop("before movel PICK_UP")
-        # movel(P["PICK_UP"], vel=100, acc=100, ref=DR_BASE)
-
-        # _check_stop("before movel PICK_DOWN")
-        # movel(P["PICK_DOWN"], vel=100, acc=100, ref=DR_BASE)
-
-        # _check_stop("before movel PICK_UP(2)")
-        # movel(P["PICK_UP"], vel=100, acc=100, ref=DR_BASE)
 
         print('####################### 큰 시험관 리턴 시작 ############ ')
+        
+        print('POUR_READY 이동 중', flush=True) # [추가]
         _check_stop("before movel POUR_READY")
-        movel(P["POUR_READY"], vel=100, acc=100, ref=DR_BASE)
+        custom_movel(P["POUR_READY"], vel=100, acc=100, ref=DR_BASE)
         print('푸어링 위치')
 
+        print('RETURN_UP 이동 중', flush=True) # [추가]
         _check_stop("before movel RETURN_UP")
-        movel(P["RETURN_UP"], vel=100, acc=100, ref=DR_BASE)
+        custom_movel(P["RETURN_UP"], vel=100, acc=100, ref=DR_BASE)
         print('리턴 업')
 
+        print('RETURN_DOWN 이동 중', flush=True) # [추가]
         _check_stop("before movel RETURN_DOWN")
-        movel(P["RETURN_DOWN"], vel=100, acc=100, ref=DR_BASE)
+        custom_movel(P["RETURN_DOWN"], vel=100, acc=100, ref=DR_BASE)
         print('리턴 다운')
 
+        print('AFTER_RETURN 이동 중', flush=True) # [추가]
         _check_stop("before movel AFTER_RETURN") # [추가]
-        movel(P["AFTER_RETURN"], vel=100, acc=100, ref=DR_BASE) # [추가]
+        custom_movel(P["AFTER_RETURN"], vel=100, acc=100, ref=DR_BASE) # [추가]
         print('리턴 후')
 
+        print('AFTER_RETURN_UP 이동 중', flush=True) # [추가]
         _check_stop("before movel AFTER_RETURN_UP") # [추가]
-        movel(P["AFTER_RETURN_UP"], vel=100, acc=100, ref=DR_BASE) # [추가]
+        custom_movel(P["AFTER_RETURN_UP"], vel=100, acc=100, ref=DR_BASE) # [추가]
         print('리턴 후 업 위치')
 
+        print('FINAL_POS 이동 중', flush=True) # [추가]
         _check_stop("before movel FINAL_POS") # [추가]
-        movel(P["FINAL_POS"], vel=100, acc=100, ref=DR_BASE) # [추가]
+        custom_movel(P["FINAL_POS"], vel=100, acc=100, ref=DR_BASE) # [추가]
 
     def return_small(P):
+        print('POUR_READY 이동 중', flush=True) # [추가]
         _check_stop("before movel POUR_READY")
-        movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('POUR_UP 이동 중', flush=True) # [추가]
         _check_stop("before movel POUR_UP")
-        movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('PICK_UP 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_UP")
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('PICK_DOWN 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_DOWN")
-        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before target_gripper_open")
         target_gripper_open()
 
+        print('PICK_UP(2) 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_UP(2)")
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('J_READY 이동 중', flush=True) # [추가]
         _check_stop("before movej ready")
-        movej(J_READY, vel=VEL, acc=ACC)
+        custom_movej(J_READY, vel=VEL, acc=ACC)
 
     def return_beaker(P):
         _check_stop("before target_gripper_open")
         target_gripper_open()
 
+        print('PICK_UP 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_UP")
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('PICK_DOWN 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_DOWN")
-        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before gripper_close")
         gripper_close()
 
+        print('PICK_UP(2) 이동 중', flush=True) # [추가]
         _check_stop("before movel PICK_UP(2)")
-        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('RETURN_UP 이동 중', flush=True) # [추가]
         _check_stop("before movel RETURN_UP")
-        movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('RETURN_DOWN 이동 중', flush=True) # [추가]
         _check_stop("before movel RETURN_DOWN")
-        movel(P["RETURN_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["RETURN_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before target_gripper_open(2)")
         target_gripper_open()
 
+        print('RETURN_UP(2) 이동 중', flush=True) # [추가]
         _check_stop("before movel RETURN_UP(2)")
-        movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        custom_movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
+        print('J_READY 이동 중', flush=True) # [추가]
         _check_stop("before movej ready")
-        movej(J_READY, vel=VEL, acc=ACC)
+        custom_movej(J_READY, vel=VEL, acc=ACC)
 
     # 실행
     if tube_type not in POSES:
