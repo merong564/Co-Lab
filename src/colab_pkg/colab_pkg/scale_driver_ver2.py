@@ -28,16 +28,16 @@ class ScaleDriver(Node):
         
         # 💡 [미디언 + LPF 하이브리드 설정]
         # 최근 5개의 샘플 중 중간값만 취하여 스파이크 노이즈를 원천 차단합니다.
-        self.window_size = 5
+        self.window_size = 7
         self.raw_buffer = deque(maxlen=self.window_size)
         
-        # 미디언이 노이즈를 걸러주므로, 반응성을 위해 알파를 0.4로 높게 잡습니다.
-        self.lpf_alpha = 0.4
+        # 미디언이 노이즈를 걸러주므로, 반응성을 위해 알파를 로 높게 잡습니다.
+        self.lpf_alpha = 0.25
         self.filtered_weight = None     
         self.published_weight = 0.0     
         
         # 분석기 데이터를 기반으로 한 환경 제어 변수
-        self.noise_window = 0.05      # PD 제어용 연속 신호 확보
+        self.noise_window = 0.3      # PD 제어용 연속 신호 확보
         self.zero_deadband = 0.55     # 0.55g 이하 초기 진동 무시
         self.jump_threshold = 10.0    # 고체 투입 시 즉시 반영
         
