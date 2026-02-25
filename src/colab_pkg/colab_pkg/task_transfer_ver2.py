@@ -279,6 +279,10 @@ def perform_task(mode, tube_type):
     ON, OFF = 1, 0
 
     def gripper_open():
+        # ✅ large 라인 잔류 방지
+        set_digital_output(3, OFF)
+        set_digital_output(4, OFF)
+
         set_digital_output(2, ON)
         set_digital_output(1, OFF)
         time.sleep(2.0)
@@ -291,6 +295,10 @@ def perform_task(mode, tube_type):
         time.sleep(2.0)
 
     def gripper_close():
+        # ✅ large 라인 잔류 방지
+        set_digital_output(3, OFF)
+        set_digital_output(4, OFF)
+
         set_digital_output(1, ON)
         set_digital_output(2, OFF)
         time.sleep(2.0)
