@@ -82,6 +82,10 @@ class UserInterface(Node):
                     cmd_type = cmd_data.get('type', '')
 
                     if cmd_type == 'start_pouring':
+                        # [추가] Firebase에서 시작 명령을 인식한 즉시 로그 출력
+                        ui_time = cmd_data.get('timestamp', 0)
+                        self.get_logger().info(f'▶ 작업 시작(Start) 신호 수신됨 (UI 클릭 시간: {ui_time})')
+
                         self.current_target_weight = float(cmd_data.get('target_weight', 0.0))
                         self.current_material = cmd_data.get('material', 'Unknown')
                         self.call_service_start_process(cmd_data)
