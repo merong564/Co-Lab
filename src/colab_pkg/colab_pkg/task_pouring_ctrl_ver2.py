@@ -4,6 +4,7 @@ import threading
 import csv # [추가] CSV 로깅용 모듈 임포트
 import os # [추가] 파일 존재 여부 확인용 모듈 임포트
 from datetime import datetime # [추가] 실험 일시 기록용 모듈 임포트
+import math # [추가] 기구학 연산용 모듈 임포트
 
 import rclpy
 from rclpy.node import Node
@@ -14,6 +15,7 @@ import DR_init
 
 from colab_interfaces.srv import RobotCommand
 from std_msgs.msg import Float32, String
+from colab_interfaces.msg import ControlLive, ControlResult # [수정] 메시지 분리 임포트
 
 # ==========================================
 # 1. 설정 및 상수
@@ -39,6 +41,31 @@ TUBE_TUNING = {
     "SMALL1": {"P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 1.0},
     "SMALL2": {"P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 1.5}
 }
+
+# ==========================================
+# [추가] 실시간 기구학 데이터 계산 함수
+# ==========================================
+def calc_kinematics(prev_tcp_vel, prev_time):
+    from DSR_ROBOT2 import get_current_velx
+    
+    try:
+        vel_data = get_current_velx()
+        vx, vy, vz = vel_data[0], vel_data[1], vel_data[2]
+        tcp_vel = math.sqrt(vx**2 + vy**2 + vz**2)
+        pour_speed = abs(vel_data[5]) # Rz 기준 회전(틸팅) 속도
+    except Exception:
+        tcp_vel = 0.0
+        pour_speed = 0.0
+
+    current_time = time.time()
+    dt = current_time - prev_time
+
+    if dt > 0:
+        tcp_acc = (tcp_vel - prev_tcp_vel) / dt
+    else:
+        tcp_acc = 0.0
+
+    return tcp_vel, tcp_acc, pour_speed, current_time
 
 # ==========================================
 # [추가] 정량 지표 계산 함수
@@ -116,6 +143,8 @@ def calc_metrics(log_t, log_w, target_w, final_w, p_gain, d_gain, max_tilt_step,
             round(overhead_time, 2) # [추가]
         ])
 
+    return overshoot, rise_t, set_t, ss_err, error_rate, p_d_ratio # [추가] 최종 계산된 지표 반환
+
 # ==========================================
 # 2. 통신 전담 노드 (서비스 & 토픽)
 # ==========================================
@@ -129,6 +158,10 @@ class TaskPouring(Node):
         # [추가] 디버그 모드 파라미터 선언 및 획득
         self.declare_parameter("debug_mode", False)
         self.debug_mode = self.get_parameter("debug_mode").value
+
+        # [수정] 목적에 따른 퍼블리셔 분리
+        self.pub_live = self.create_publisher(ControlLive, "log_control_live", 10)
+        self.pub_result = self.create_publisher(ControlResult, "log_control_result", 10)
 
         # [추가] 디버그 모드일 경우 rqt_plot용 퍼블리셔 생성
         if self.debug_mode:
@@ -162,14 +195,6 @@ class TaskPouring(Node):
             callback_group=self.callback_group,
         )
 
-    # def stop_callback(self, msg: String):
-    #     global STOP_REQUESTED
-    #     if (msg.data or "").strip().upper() != "STOP":
-    #         return
-
-    #     STOP_REQUESTED = True
-    #     self.get_logger().warn("[WARN] STOP received -> will return to ready pose then finish")
-
     def stop_callback(self, msg: String):
             global STOP_REQUESTED
             cmd = (msg.data or "").strip().upper()
@@ -177,10 +202,6 @@ class TaskPouring(Node):
             if cmd == "STOP":
                 STOP_REQUESTED = True
                 self.get_logger().warn("[STOP] received -> flag set (node stays alive)")
-
-                # from DSR_ROBOT2 import stop, DR_QSTOP
-                # stop(0)
-                # self.get_logger().warn("[STOP] Robot stop() called (DR_QSTOP)")
 
             elif cmd == "RESET":
                 STOP_REQUESTED = False
@@ -302,6 +323,11 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     log_w = [] # [추가] 현재 무게 로깅 리스트
     log_d = [] # [추가] 제어 입력(delta) 로깅 리스트
 
+    # [추가] 속도 및 가속도 계산을 위한 이전 상태 변수
+    prev_time = time.time()
+    prev_tcp_vel = 0.0
+    prev_pour_speed = 0.0
+
     # [추가] 초기 무게 감지 플래그 추가
     weight_detected = False
 
@@ -314,7 +340,6 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     print(f"[SYSTEM] Task Start! Target: {target_weight}g | Tube: {tube_type} | Final Stop: {stop_target}g")
 
     if tube_type == "LARGE":
-        # pour_ready_pos = posx(585.440, 157.760, 160.631, 91.920, 97.360, 88.550)
         pour_ready_pos = posx(561.045, 144.760, 175.965, 91.920, 97.358, 88.558)
     else: # "SMALL1", "SMALL2"
         pour_ready_pos = posx(585.440, 144.760, 160.631, 91.920, 97.360, 88.550)
@@ -373,10 +398,28 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
 
             actual_cycle_time = time.time() - start_t
             
-            # [수정] 동적 파라미터 로깅 함수로 전달
-            calc_metrics(log_t, log_w, target_weight, final_settled_weight, 
-                         active_p_gain, active_d_gain, active_max_tilt_step, active_stop_thresh, 
-                         tube_type, actual_cycle_time)            
+            # [수정] 로깅 함수로부터 계산된 지표 반환받기
+            metrics_result = calc_metrics(log_t, log_w, target_weight, final_settled_weight, 
+                                          active_p_gain, active_d_gain, active_max_tilt_step, active_stop_thresh, 
+                                          tube_type, actual_cycle_time)            
+            
+            # [수정] 종료 후 결과 퍼블리시 (ControlResult)
+            if metrics_result:
+                overshoot, rise_t, set_t, ss_err, error_rate, p_d_ratio = metrics_result
+                
+                msg_result = ControlResult()
+                msg_result.p_gain = float(active_p_gain)
+                msg_result.d_gain = float(active_d_gain)
+                msg_result.max_tilt_step = float(active_max_tilt_step)
+                msg_result.stop_threshold = float(active_stop_thresh)
+                msg_result.p_d_ratio = float(p_d_ratio)
+                msg_result.overshoot = float(overshoot)
+                msg_result.rise_time = float(rise_t)
+                msg_result.settling_time = float(set_t)
+                msg_result.ss_error = float(ss_err)
+                msg_result.error_rate = float(error_rate)
+                node.pub_result.publish(msg_result)
+
             print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
@@ -404,6 +447,19 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
             delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step)
             
         log_d.append(delta) # [추가] 제어 입력 로깅
+
+        # [추가] 실시간 기구학 데이터 계산
+        tcp_vel, tcp_acc, pour_speed, current_time = calc_kinematics(prev_tcp_vel, prev_time)
+        prev_tcp_vel = tcp_vel
+        prev_pour_speed = pour_speed
+        prev_time = current_time
+
+        # [수정] 실시간 제어 지표 퍼블리시 (ControlLive)
+        msg_live = ControlLive()
+        msg_live.tcp_vel = float(tcp_vel)
+        msg_live.tcp_acc = float(tcp_acc)
+        msg_live.pour_speed = float(pour_speed)
+        node.pub_live.publish(msg_live)
 
         # [추가] 디버깅 모드일 경우 rqt_plot을 위한 데이터 퍼블리시
         if getattr(node, 'debug_mode', False):
