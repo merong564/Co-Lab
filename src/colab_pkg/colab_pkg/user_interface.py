@@ -1,10 +1,15 @@
+### 2. `user_interface.py` (백엔드 업데이트)
+'''`weight_callback` 함수에서 `phase`를 검사하여 `Mixing`이나 `Return` 상태일 때는 아예 노드 레벨에서 무게 데이터를 차단(0.0g)하도록 수정했습니다. 
+또한, `start_process`로 보낼 때 문자열 매칭(정규식)도 '에탄올/아세톤/물'에 맞게 업데이트했습니다.
+
+```python'''
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260224_v01 (Simplified End-to-End Testing)
+[Version] 260225_v05 (Chemical Recipe & Phase Force Shield)
 """
 
 import rclpy
@@ -22,7 +27,7 @@ from std_msgs.msg import Float32, String
 try:
     from colab_interfaces.srv import RobotCommand
     from colab_interfaces.msg import SystemStatus
-    from colab_interfaces.msg import ControlMetrics  # [추가 1] 새로운 제어 지표 메시지 임포트
+    from colab_interfaces.msg import ControlMetrics  
     IMPORT_SUCCESS = True
 except ImportError:
     print("❌ [Error] colab_interfaces 패키지를 찾을 수 없습니다. source install/setup.bash를 확인하세요.")
@@ -38,7 +43,7 @@ class UserInterface(Node):
             cred = credentials.Certificate("/home/rokey/Co-Lab/serviceAccountKey.json")
             if not firebase_admin._apps:
                 firebase_admin.initialize_app(cred, {
-                    'databaseURL': 'https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app'
+                    'databaseURL': '[https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app](https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app)'
                 })
             self.get_logger().info("🔥 Firebase Connected!")
             db.reference('commands').set({}) 
@@ -53,11 +58,10 @@ class UserInterface(Node):
             self.create_subscription(Float32, 'load_cell/weight', self.weight_callback, 10)
             self.create_subscription(SystemStatus, 'system_status', self.system_status_callback, 10)
             
-            # [추가 2] 제어 성능 지표 전용 토픽 구독 생성
             self.create_subscription(ControlMetrics, 'log_control_metrics', self.control_metrics_callback, 10)
         
         self.timer = self.create_timer(0.1, self.loop_callback)
-        self.last_command_timestamp = time.time() * 1000 
+        self.last_command_timestamp = 0
         
         self.latest_weight = 0.0
         self.latest_system_status = {}
@@ -65,7 +69,7 @@ class UserInterface(Node):
         self.current_target_weight = 0.0
         self.current_material = "Unknown"
         self.last_total_count = 0 
-        self.is_first_msg = True # [수정] 통신 연결 후 첫 번째 메시지를 구별하는 안전 플래그 추가
+        self.is_first_msg = True 
 
     def loop_callback(self):
         self.check_firebase_commands()
@@ -82,7 +86,6 @@ class UserInterface(Node):
                     cmd_type = cmd_data.get('type', '')
 
                     if cmd_type == 'start_pouring':
-                        # [추가] Firebase에서 시작 명령을 인식한 즉시 로그 출력
                         ui_time = cmd_data.get('timestamp', 0)
                         self.get_logger().info(f'▶ 작업 시작(Start) 신호 수신됨 (UI 클릭 시간: {ui_time})')
 
@@ -108,9 +111,11 @@ class UserInterface(Node):
         req = RobotCommand.Request()
         req.mode = "FULL"
         
-        match = re.search(r'무지개(\d+(\.\d+)?)/푸른색(\d+(\.\d+)?)/자갈(\d+(\.\d+)?)', self.current_material)
+        # 💡 [핵심 수정] 에탄올, 아세톤, 물 포맷에 맞춰 정규표현식 변경!
+        match = re.search(r'에탄올(\d+(\.\d+)?)/아세톤(\d+(\.\d+)?)/물(\d+(\.\d+)?)', self.current_material)
         if match:
             req.targets = ["LARGE", "SMALL1", "SMALL2"]
+            # match.group(5) = 물, match.group(1) = 에탄올, match.group(3) = 아세톤
             req.target_weights = [float(match.group(5)), float(match.group(1)), float(match.group(3))]
         else:
             req.targets = ["LARGE"]
@@ -148,26 +153,21 @@ class UserInterface(Node):
             
             db.reference().update(updates)
         except Exception as e:
-            # 💡 [디버깅 추가] 에러가 나면 숨기지 말고 터미널에 빨간펜으로 소리치게 만듭니다!
             self.get_logger().error(f"❌ 파이어베이스 업로드 실패: {e}")
 
     def system_status_callback(self, msg):
-        # [수정] 시작: 로봇 노드가 재시작되거나 1회차 완료 시 저장이 누락(Skip)되는 버그 완벽 해결
         if getattr(self, 'is_first_msg', True):
-            # 처음 통신이 연결되었을 때는 현재 카운트 상태만 동기화하고 넘어감
             self.last_total_count = msg.total_count
             self.is_first_msg = False
         elif msg.total_count > self.last_total_count:
-            # 기존 카운트가 0이든 5든 상관없이 숫자가 올라갔다면 무조건 저장
             self.save_experiment_history(msg)
             self.last_total_count = msg.total_count
-        # [수정] 끝
 
         self.latest_system_status = {
             "phase": msg.phase,
-            "tcp_vel": msg.tcp_vel,       # 주석 해제 (복구)
-            "tcp_acc": msg.tcp_acc,       # 주석 해제 (복구)
-            "pour_speed": msg.pour_speed, # 주석 해제 (복구)
+            "tcp_vel": msg.tcp_vel,       
+            "tcp_acc": msg.tcp_acc,       
+            "pour_speed": msg.pour_speed, 
             "total_count": msg.total_count,
             "success_count": msg.success_count,
             "error_rate": round(msg.error_rate, 2),
@@ -180,7 +180,7 @@ class UserInterface(Node):
             final_w = round(self.latest_weight, 2)
             
             ss_error_g = round(abs(target_w - final_w), 2)
-            error_rate = round(msg.error_rate, 2)
+            local_error_rate = round(msg.error_rate, 2)
 
             history_data = {
                 'timestamp': int(time.time() * 1000),
@@ -188,8 +188,7 @@ class UserInterface(Node):
                 'material': self.current_material,
                 'target_weight': target_w,
                 'final_weight': final_w,
-                'error_rate': error_rate,
-                'success': True if error_rate <= 10.0 else False,
+                'success': True if local_error_rate <= 10.0 else False,
                 'ss_error_g': ss_error_g,
                 'cycle_time': round(msg.last_cycle_time, 2)
             }
@@ -197,16 +196,20 @@ class UserInterface(Node):
             db_ref = db.reference('experiment_history')
             new_record = db_ref.push(history_data)
             
-            self.get_logger().info(f"💾 [DB 저장 성공] ID: {new_record.key} | 오차: {error_rate}%")
+            self.get_logger().info(f"💾 [DB 저장 성공 - 기본 히스토리] ID: {new_record.key}")
         except Exception as e:
             self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
 
-    # [추가 3] ControlMetrics 데이터를 수신하여 DB에만 별도로 저장하는 콜백 함수
     def control_metrics_callback(self, msg):
         try:
+            current_pour_speed = round(self.latest_system_status.get('pour_speed', 0.0), 2)
+            current_error_rate = round(self.latest_system_status.get('error_rate', 0.0), 2)
+
             metrics_data = {
                 'timestamp': int(time.time() * 1000),
                 'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'pour_speed': current_pour_speed,  
+                'error_rate': current_error_rate,   
                 'p_gain': round(msg.p_gain, 4),
                 'd_gain': round(msg.d_gain, 4),
                 'max_tilt_step': round(msg.max_tilt_step, 2),
@@ -221,9 +224,8 @@ class UserInterface(Node):
             db_ref = db.reference('control_metrics_history')
             new_record = db_ref.push(metrics_data)
             
-            self.get_logger().info(f"📊 [제어 지표 DB 저장 완료] ID: {new_record.key}")
+            self.get_logger().info(f"📊 [제어 지표 DB 저장 완료] Pour Speed & Error Rate 포함됨. ID: {new_record.key}")
 
-            # UI 화면에 튜닝값을 띄워주기 위해 최신 시스템 상태 딕셔너리에도 업데이트
             self.latest_system_status['max_tilt_step'] = round(msg.max_tilt_step, 2)
             self.latest_system_status['stop_threshold'] = round(msg.stop_threshold, 2)
 
@@ -231,14 +233,19 @@ class UserInterface(Node):
             self.get_logger().error(f"❌ DB 제어 지표 저장 실패: {e}")
 
     def joint_callback(self, msg): 
-        # 1. 관절 각도 저장
         self.latest_joints = [math.degrees(rad) for rad in msg.position]
         self.last_joint_time = time.time()
 
     def weight_callback(self, msg): 
-        self.latest_weight = float(msg.data)
-        # 💡 [디버깅 추가] 토픽 데이터를 잘 받고 있는지 터미널에 띄웁니다!
-        self.get_logger().info(f"📡 [UI 브릿지 수신]: {self.latest_weight:.1f} g")
+        # 💡 [핵심 방어 로직] 3번의 붓기가 다 끝나고 섞기(Mixing)로 넘어갈 때 무게 토픽을 무시합니다.
+        current_phase = self.latest_system_status.get('phase', 'Ready')
+        
+        if current_phase in ["Mixing", "Return"]:
+            self.latest_weight = 0.0
+            # 콘솔이 너무 지저분해지지 않도록 로깅은 생략합니다.
+        else:
+            self.latest_weight = float(msg.data)
+            self.get_logger().info(f"📡 [UI 브릿지 수신]: {self.latest_weight:.1f} g")
 
 def main(args=None):
     rclpy.init(args=args)
