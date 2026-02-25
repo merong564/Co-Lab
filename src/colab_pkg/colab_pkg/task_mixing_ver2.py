@@ -240,10 +240,10 @@ class TaskMixing(Node):
         # ✅ 위로(올릴 때)는 천천히 / 아래로(털려고 내릴 때)는 빠르게
         def shake_off_before_return(
             lift_mm=70.0,
-            tap_mm=25.0,
+            tap_mm=50.0,
             tap_count=12,
             up_vel=60, up_acc=60,        # 위로 갈 때(천천히)
-            down_vel=350, down_acc=500,  # 아래로 갈 때(빠르게)
+            down_vel=600, down_acc=900,  # 아래로 갈 때(빠르게)
             ref=DR_BASE
         ):
             log("[3-1] 믹서 털기(위=천천히/아래=빠르게) 시작")
