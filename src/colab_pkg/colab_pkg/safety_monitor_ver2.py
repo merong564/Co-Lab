@@ -5,6 +5,8 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 
 from std_msgs.msg import String
+from colab_interfaces.msg import SystemStatus # [추가]
+
 import DR_init
 
 # ===============================
@@ -33,8 +35,12 @@ class SafetyMonitor(Node):
 
         # ===== 튜닝(꼭 필요한 것만 + 주석) =====
         self.HZ = 20.0
-        # 충격 기준: 힘 크기(mag)의 프레임 간 변화량 |mag - prev_mag| 가 이 값 이상이면 충격 후보
-        self.DF_THRESHOLD = 5.0
+        
+        # [수정] 단일 고정 임계값 삭제 후 평시/접촉시 임계값 분리 및 동적 변수 선언
+        self.DF_THRESH_NORMAL = 10.0 
+        self.DF_THRESH_HIGH = 20.0 
+        self.current_thresh = self.DF_THRESH_NORMAL # [추가]
+
         # 연속 발행 방지(초)
         self.COOLDOWN_SEC = 2.0
         # 시작 직후 흔들림 무시(프레임)
@@ -44,9 +50,26 @@ class SafetyMonitor(Node):
         self.last_fire_ts = 0.0
         self.warmup_cnt = 0
 
+        # [추가] 공정 상태 구독자 설정
+        self.sub_status = self.create_subscription(
+            SystemStatus, 
+            'system_status', 
+            self.status_callback, 
+            10
+        )
+
         # ✅ loop -> perform_task
         self.timer = self.create_timer(1.0 / self.HZ, self.perform_task)
         self.get_logger().info("SafetyMonitor Ready. Topic: /dsr01/stop/impact")
+
+    # [추가] 공정 상태에 따른 임계값 동적 변경 콜백
+    def status_callback(self, msg: SystemStatus):
+        if msg.phase in ["Mixing"]:
+        # if msg.phase in ["Transfer", "Mixing", "Return"]:
+
+            self.current_thresh = self.DF_THRESH_HIGH
+        else:
+            self.current_thresh = self.DF_THRESH_NORMAL
 
     def perform_task(self):
         try:
@@ -70,10 +93,13 @@ class SafetyMonitor(Node):
         df = abs(mag - self.prev_mag)
         self.prev_mag = mag
 
-        self.get_logger().info(f"실시간 감지 힘 - Mag: {mag:.2f}, DF: {df:.2f}")
+        # [수정] 현재 적용 중인 임계값을 출력하도록 로그 변경
+        self.get_logger().info(f"실시간 감지 힘 - Mag: {mag:.2f}, DF: {df:.2f} (Thresh: {self.current_thresh})")
 
         now = time.time()
-        if df >= self.DF_THRESHOLD and (now - self.last_fire_ts) >= self.COOLDOWN_SEC:
+        
+        # [수정] self.DF_THRESHOLD 대신 self.current_thresh 사용
+        if df >= self.current_thresh and (now - self.last_fire_ts) >= self.COOLDOWN_SEC:
             self.last_fire_ts = now
             msg = String()
             msg.data = 'STOP'
