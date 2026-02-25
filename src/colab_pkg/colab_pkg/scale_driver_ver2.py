@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32
@@ -17,13 +18,25 @@ class ScaleDriver(Node):
         # 1. 설정 변수
         self.port = '/dev/ttyACM0'
         self.baudrate = 115200
-        self.current_weight = 0.0
         self.is_active = False
-        self.ser = None # [추가] 시리얼 객체 초기화
+        self.ser = None 
         
-        # 💡 [추가] LPF(Low Pass Filter) 설정 변수
-        self.lpf_alpha = 0.2  # 0.0 ~ 1.0 사이값 (작을수록 부드럽지만 느림, 클수록 빠르지만 노이즈 포함)
-        self.filtered_weight = None # 필터링된 무게 초기화 상태
+        # 💡 [캘리브레이션 보정 계수] 
+        self.cal_ratio = 190.0 / 187.8  
+        
+        # 💡 [초정밀 필터링 설정]
+        self.lpf_alpha = 0.1            
+        self.filtered_weight = None     
+        self.published_weight = 0.0     
+        
+        self.noise_window = 0.3         
+        self.zero_deadband = 0.2        
+        
+        # 🚀 [추가] 계단식 점프(Jump) 감지 임계값
+        # 한 번에 5g 이상 훅 변하면 필터를 무시하고 즉각(계단식) 반영!
+        self.jump_threshold = 5.0       
+        
+        self.last_printed_weight = None
         
         # 2. 퍼블리셔 생성
         self.publisher_ = self.create_publisher(Float32, 'load_cell/weight', 10)
@@ -42,22 +55,19 @@ class ScaleDriver(Node):
     def execute_pouring_callback(self, request, response):
         self.get_logger().info(f"[Service] Request Received. Connecting to Arduino for Tare...")
         
-        # 이미 연결되어 있다면 닫고 새로 연결 (재부팅 유도하여 영점 조절 수행)
         if self.ser is not None and self.ser.is_open:
             self.ser.close()
             time.sleep(0.5)
 
-        # 서비스 호출 시 시리얼 연결 수행
         try:
             self.ser = serial.Serial(self.port, self.baudrate, timeout=1)
             self.get_logger().info(f'✅ 아두이노 연결 및 영점 조절 시작: {self.port}')
             
-            # 아두이노 부팅 및 영점 조절 완료 대기 시간
             time.sleep(2) 
             self.ser.reset_input_buffer()
             
-            # 💡 [추가] 영점 조절을 했으므로 필터 상태도 초기화하여 0부터 다시 잡도록 함
             self.filtered_weight = None 
+            self.published_weight = 0.0
             
             self.is_active = True
             response.success = True
@@ -71,31 +81,54 @@ class ScaleDriver(Node):
         return response
 
     def timer_callback(self):
-        # self.ser가 None이 아니고 연결된 상태인지 확인 추가
         if self.is_active and self.ser and self.ser.is_open and self.ser.in_waiting > 0:
             try:
                 line = self.ser.readline().decode('utf-8').strip()
                 
                 if line:
                     try:
-                        raw_weight = float(line)
+                        raw_weight = float(line) * self.cal_ratio
                         
-                        # 💡 [핵심 수정] Low Pass Filter (EMA) 적용
+                        # ====================================================
+                        # 💡 [1단계] 점프 감지 + Low Pass Filter
+                        # ====================================================
                         if self.filtered_weight is None:
-                            # 첫 번째 데이터는 기준점이 없으므로 필터링 없이 그대로 수용
                             self.filtered_weight = raw_weight
                         else:
-                            # 공식: (알파 * 들어온값) + ((1 - 알파) * 이전필터값)
-                            self.filtered_weight = (self.lpf_alpha * raw_weight) + ((1.0 - self.lpf_alpha) * self.filtered_weight)
+                            # 🚀 원본 값과 필터값의 차이가 너무 크면(고체를 올리거나 뺐을 때)
+                            if abs(raw_weight - self.filtered_weight) > self.jump_threshold:
+                                self.filtered_weight = raw_weight  # 지연 없이 즉시 계단식 점프!
+                            else:
+                                # 평소(물 붓기, 미세 진동)에는 부드럽게 필터 적용
+                                self.filtered_weight = (self.lpf_alpha * raw_weight) + ((1.0 - self.lpf_alpha) * self.filtered_weight)
                         
-                        self.current_weight = self.filtered_weight
+                        # [2단계] 소수점 3째 자리까지만 반올림
+                        precise_weight = round(self.filtered_weight, 3)
                         
+                        # [3단계] Hysteresis (동적 데드밴드) 
+                        diff = abs(precise_weight - self.published_weight)
+                        if diff > self.noise_window:
+                            self.published_weight = precise_weight
+                            
+                        # [4단계] 절대 영점 락
+                        if abs(self.published_weight) <= self.zero_deadband:
+                            self.published_weight = 0.0
+
+                        # [5단계] 마이너스 값 원천 차단
+                        if self.published_weight < 0.0:
+                            self.published_weight = 0.0
+
+                        if self.published_weight != self.last_printed_weight:
+                            self.get_logger().info(f"⚖️ [현재 확정 무게]: {self.published_weight:.3f} g")
+                            self.last_printed_weight = self.published_weight
+
+                        # 퍼블리시
                         msg = Float32()
-                        msg.data = self.filtered_weight # 💡 필터링된 깨끗한 값을 퍼블리시
+                        msg.data = self.published_weight 
                         self.publisher_.publish(msg)
                         
                     except ValueError:
-                        self.get_logger().warn(f'잘못된 데이터 무시함: {line}')
+                        pass 
                         
             except Exception as e:
                 self.get_logger().error(f'데이터 읽기 중 에러: {e}')
