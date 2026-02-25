@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Lab UI - v01</title>
+    <title>Smart Lab UI - v02</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -31,7 +31,6 @@
         .joint-val { font-size: 0.85rem; background: #e9ecef; padding: 4px 8px; border-radius: 6px; display: inline-block; width: 100%; text-align: center; font-family: monospace; }
         .phase-badge { font-size: 1.2rem; padding: 10px; width: 100%; display: block; margin-bottom: 10px; }
         .tolerance-badge { background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; vertical-align: middle; margin-left: 4px; font-weight: 800; }
-        /* 재료 입력창 스타일 */
         .ingredient-input { border: 1px solid #ced4da; border-radius: 8px; padding: 10px; margin-bottom: 10px; background-color: #fff; }
         .ingredient-input .form-control { border: none; background-color: #f8f9fa; text-align: center; font-weight: bold; }
     </style>
@@ -64,26 +63,26 @@
                         <span id="tare-status" class="badge bg-secondary">미설정</span>
                     </div>
 
-                    <label class="form-label fw-bold">재료별 무게 설정 (Custom Recipe)</label>
+                    <label class="form-label fw-bold">액체 재료 설정 (Custom Recipe)</label>
                     <div class="ingredient-input">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span><i class="fas fa-circle" style="color: #e83e8c;"></i> 무지개 비즈</span>
+                            <span><i class="fas fa-tint" style="color: #dc3545;"></i> 붉은 물</span>
                             <div class="input-group input-group-sm" style="width: 100px;">
-                                <input type="number" id="mat_rainbow" class="form-control" value="10" step="1" oninput="calculateTotalWeight()">
+                                <input type="number" id="mat_red" class="form-control" value="10" step="1" oninput="calculateTotalWeight()">
                                 <span class="input-group-text">g</span>
                             </div>
                         </div>
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span><i class="fas fa-circle text-primary"></i> 푸른색 구슬</span>
+                            <span><i class="fas fa-tint" style="color: #0d6efd;"></i> 푸른 물</span>
                             <div class="input-group input-group-sm" style="width: 100px;">
                                 <input type="number" id="mat_blue" class="form-control" value="10" step="1" oninput="calculateTotalWeight()">
                                 <span class="input-group-text">g</span>
                             </div>
                         </div>
                         <div class="d-flex justify-content-between align-items-center">
-                            <span><i class="fas fa-circle text-secondary"></i> 자갈</span>
+                            <span><i class="fas fa-tint text-info"></i> 기본 물</span>
                             <div class="input-group input-group-sm" style="width: 100px;">
-                                <input type="number" id="mat_gravel" class="form-control" value="100" step="1" oninput="calculateTotalWeight()">
+                                <input type="number" id="mat_water" class="form-control" value="100" step="1" oninput="calculateTotalWeight()">
                                 <span class="input-group-text">g</span>
                             </div>
                         </div>
@@ -251,13 +250,12 @@
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
 <script>
-    // [추가] 사용자가 각 재료의 무게를 변경할 때마다 총합을 계산하여 '목표 무게' 칸에 업데이트하는 함수
     function calculateTotalWeight() {
-        const rainbow = parseFloat(document.getElementById('mat_rainbow').value) || 0;
+        const red = parseFloat(document.getElementById('mat_red').value) || 0;
         const blue = parseFloat(document.getElementById('mat_blue').value) || 0;
-        const gravel = parseFloat(document.getElementById('mat_gravel').value) || 0;
+        const water = parseFloat(document.getElementById('mat_water').value) || 0;
         
-        const total = rainbow + blue + gravel;
+        const total = red + blue + water;
         document.getElementById('target_weight').value = total;
     }
 
@@ -265,7 +263,6 @@
     if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const database = firebase.database();
 
-    // [추가] UI 가상 누적을 위한 변수 선언
     let accumulatedOffset = 0; 
     let lastRawWeight = 0;     
 
@@ -345,7 +342,6 @@
         }
     }
 
-    // [수정] 영점(Tare) 드랍을 감지하고 무게를 가상으로 누적하는 로직으로 교체
     database.ref('sensor_data').on('value', (snapshot) => {
         const d = snapshot.val();
         if(!d) return;
@@ -354,29 +350,33 @@
         lastUpdateTimestamp = Date.now();
         updateConnectionStatus('online', 'Autonomous');
 
-        // 로드셀에서 올라오는 날것(Raw)의 무게
+        // 💡 [핵심 방어 로직] 믹싱이나 복귀 단계에서는 외부 힘이 가해지므로 무게를 0으로 강제 고정합니다.
+        if (currentPhase === "Mixing" || currentPhase === "Return") {
+            document.getElementById('current_weight').innerText = "0.0";
+            document.getElementById('current_flow').innerText = "0.0";
+            
+            lastRawWeight = parseFloat(d.weight || 0); // 영점 로직이 꼬이지 않도록 내부 추적은 계속합니다.
+            lastTime = Date.now();
+            return;
+        }
+
         const rawWeight = parseFloat(d.weight || 0);
 
-        // [추가] 영점(Tare) 감지 알고리즘!
-        // 방금 전 무게보다 현재 무게가 5g 이상 갑자기 떨어졌다면, 타 노드에서 영점을 잡은 것으로 판단
         if (lastRawWeight - rawWeight > 5.0) {
-            accumulatedOffset += lastRawWeight; // 떨어지기 직전의 무게를 오프셋에 더해줌
-            addLog(`🔄 [UI 보정] 영점 조절 감지됨. 이전 무게(${lastRawWeight.toFixed(1)}g) 누적 완료.`);
+            accumulatedOffset += lastRawWeight;
+            addLog("🔄 [UI 보정] 영점 조절 감지됨. 이전 무게(" + lastRawWeight.toFixed(1) + "g) 누적 완료.");
         }
         lastRawWeight = rawWeight;
 
-        // 화면과 그래프에 보여줄 진짜 누적 무게
         const displayWeight = rawWeight + accumulatedOffset;
         const currentTime = Date.now();
         
         let flowRate = 0;
         if (lastTime > 0) {
             const dt = (currentTime - lastTime) / 1000;
-            // 유량 계산도 가상 누적 무게를 기준으로 변경
             if (dt > 0) flowRate = Math.max(0, (displayWeight - lastWeight) / dt);
         }
 
-        // [수정] weight 대신 displayWeight로 텍스트 업데이트
         document.getElementById('current_weight').innerText = displayWeight.toFixed(1);
         document.getElementById('current_flow').innerText = flowRate.toFixed(1);
 
@@ -386,7 +386,7 @@
 
             experimentData.push({
                 time: elapsedTime,
-                weight: displayWeight.toFixed(2), // [수정] 누적 무게 저장
+                weight: displayWeight.toFixed(2),
                 flow: flowRate
             });
         }
@@ -396,11 +396,11 @@
             combinedChart.data.datasets.forEach((dataset) => dataset.data.shift());
         }
         combinedChart.data.labels.push(new Date().toLocaleTimeString());
-        combinedChart.data.datasets[0].data.push(displayWeight); // [수정] 차트에 누적 무게 그리기
+        combinedChart.data.datasets[0].data.push(displayWeight);
         combinedChart.data.datasets[1].data.push(flowRate);
         combinedChart.update('none');
 
-        lastWeight = displayWeight; // [수정]
+        lastWeight = displayWeight;
         lastTime = currentTime;
     });
 
@@ -412,7 +412,6 @@
         if(stats.tcp_acc !== undefined) document.getElementById('val_acc').innerText = stats.tcp_acc;
         if(stats.pour_speed !== undefined) document.getElementById('pour_speed').innerText = stats.pour_speed;
         
-        // [추가] 붓기 노드에서 넘어오는 튜닝 파라미터 연동
         if(stats.max_tilt_step !== undefined) {
             document.getElementById('val_max_step').innerText = stats.max_tilt_step.toFixed(1);
         }
@@ -442,7 +441,6 @@
         if (Date.now() - lastUpdateTimestamp > 3000) return;
 
         if(data.current_angle !== undefined) { 
-            // 💡 [수정 내용] 태그가 화면에 실제로 존재하는지 먼저 확인(if)하는 안전장치 추가!
             const angleElement = document.getElementById('robot_angle');
             const cupElement = document.getElementById('cup-icon');
             
@@ -450,7 +448,7 @@
                 angleElement.innerText = data.current_angle; 
             }
             if (cupElement) {
-                cupElement.style.transform = `rotate(${data.current_angle}deg)`; 
+                cupElement.style.transform = "rotate(" + data.current_angle + "deg)"; 
             }
         }
     });
@@ -482,15 +480,18 @@
             const ssError = data.ss_error_g !== undefined ? data.ss_error_g : '-';
             const cycle = data.cycle_time !== undefined ? data.cycle_time : '-';
             
-            tr.innerHTML = `
-                <td class="fw-bold">${i + 1}</td>
-                <td>${data.target_weight}g<br><small class="text-muted">${materialStr}</small></td>
-                <td class="text-primary fw-bold">${data.final_weight}g<br><small class="text-danger">(±${ssError}g)</small></td>
-                <td class="${data.error_rate <= 10.0 ? 'text-success' : 'text-danger'} fw-bold">${data.error_rate}%</td>
-                <td class="${successRate === 100 ? 'text-success' : 'text-danger'} fw-bold">${successRate}%</td>
-                <td>${cycle}s</td>
-                <td>${successBadge}</td>
-            `;
+            const errorClass = data.error_rate <= 10.0 ? 'text-success' : 'text-danger';
+            const successRateClass = successRate === 100 ? 'text-success' : 'text-danger';
+
+            tr.innerHTML = 
+                "<td class='fw-bold'>" + (i + 1) + "</td>" +
+                "<td>" + data.target_weight + "g<br><small class='text-muted'>" + materialStr + "</small></td>" +
+                "<td class='text-primary fw-bold'>" + data.final_weight + "g<br><small class='text-danger'>(±" + ssError + "g)</small></td>" +
+                "<td class='" + errorClass + " fw-bold'>" + data.error_rate + "%</td>" +
+                "<td class='" + successRateClass + " fw-bold'>" + successRate + "%</td>" +
+                "<td>" + cycle + "s</td>" +
+                "<td>" + successBadge + "</td>";
+            
             tbody.appendChild(tr);
         }
     });
@@ -506,7 +507,7 @@
             badge.innerText = newPhase;
             document.querySelectorAll('.step-item').forEach(el => el.classList.remove('step-active'));
             
-            const stepId = `step-${newPhase}`;
+            const stepId = "step-" + newPhase;
             const stepEl = document.getElementById(stepId);
             
             if(stepEl) {
@@ -541,18 +542,17 @@
     function startExperiment() {
         if (!isTareSet) { alert("⚠️ 영점 조절을 먼저 해주세요!"); return; }
         
-        const rainbow = document.getElementById('mat_rainbow').value;
+        const red = document.getElementById('mat_red').value;
         const blue = document.getElementById('mat_blue').value;
-        const gravel = document.getElementById('mat_gravel').value;
+        const water = document.getElementById('mat_water').value;
         const target = document.getElementById('target_weight').value;
         const mixing = document.getElementById('mixing_duration').value;
         
-        const customMaterial = `Custom Recipe (무지개${rainbow}/푸른색${blue}/자갈${gravel})`;
+        const customMaterial = "Custom Recipe (붉은물" + red + "/푸른물" + blue + "/기본물" + water + ")";
         
-        if(confirm(`[${customMaterial}]\n작업 시작?\n목표: ${target}g / 혼합: ${mixing}초`)) {
+        if(confirm("[" + customMaterial + "]\n작업 시작?\n목표: " + target + "g / 혼합: " + mixing + "초")) {
             resetData();
             
-            // [추가] 새 실험 시작 시 가상 누적값 초기화
             accumulatedOffset = 0; 
             lastRawWeight = 0;
 
@@ -567,7 +567,7 @@
                 material: customMaterial, 
                 timestamp: Date.now() 
             });
-            addLog(`🚀 Start: ${target}g, Mix ${mixing}s`);
+            addLog("🚀 Start: " + target + "g, Mix " + mixing + "s");
         }
     }
     
@@ -579,7 +579,6 @@
     function sendTare() { 
         resetData(); 
         
-        // [추가] 수동 영점 조절 시 가상 누적치 완전 초기화
         accumulatedOffset = 0; 
         lastRawWeight = 0;
 
@@ -603,18 +602,18 @@
         const box = document.getElementById('log-box');
         if(box) {
             const time = new Date().toLocaleTimeString();
-            box.innerHTML = `[${time}] ${msg}<br>` + box.innerHTML;
+            box.innerHTML = "[" + time + "] " + msg + "<br>" + box.innerHTML;
         }
     }
     
     function exportToCSV() {
         if (experimentData.length === 0) { alert("저장할 데이터가 없습니다."); return; }
         let csvContent = "data:text/csv;charset=utf-8,Time(s),Weight(g),Flow(g/s)\r\n";
-        experimentData.forEach(row => { csvContent += `${row.time},${row.weight},${row.flow.toFixed(2)}\r\n`; });
+        experimentData.forEach(row => { csvContent += row.time + "," + row.weight + "," + row.flow.toFixed(2) + "\r\n"; });
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
         link.setAttribute("href", encodedUri);
-        link.setAttribute("download", `experiment_260220_v01.csv`);
+        link.setAttribute("download", "experiment_260220_v01.csv");
         document.body.appendChild(link);
         link.click();
     }
