@@ -72,9 +72,7 @@ class TaskMixing(Node):
         from DSR_ROBOT2 import (
             movej, movel, posj, posx,
             set_digital_output, wait, set_robot_mode, ROBOT_MODE_AUTONOMOUS,
-            task_compliance_ctrl, release_compliance_ctrl,
-            set_desired_force, release_force, DR_FC_MOD_REL,
-            move_periodic, get_tool_force, get_current_posx, amovel,
+            move_periodic, get_current_posx,
             DR_BASE, DR_TOOL
         )
 
@@ -131,7 +129,7 @@ class TaskMixing(Node):
             movel(posx(self.pos_mixer_pick_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             log("믹서 원위치 반환 완료")
 
-        # ✅ [수정] 위로(올릴 때)는 천천히 / 아래로(털려고 내릴 때)는 빠르게
+        # ✅ 위로(올릴 때)는 천천히 / 아래로(털려고 내릴 때)는 빠르게
         def shake_off_before_return(
             lift_mm=70.0,
             tap_mm=25.0,
@@ -163,71 +161,29 @@ class TaskMixing(Node):
 
             log("[3-1] 믹서 털기 완료")
 
+        # ✅ 액체용 믹싱: 외력/순응제어 제거 + move_periodic으로 "베이스 기준" 위아래 혼합
         def mixer_descend_and_wiggle(end_pos_list, fz_trigger=7.0, down_force=-20.0):
-            def _get_fz():
-                ret = get_tool_force(DR_TOOL)
-                if ret is None or isinstance(ret, int) or len(ret) < 3:
-                    return 0.0
-                return abs(float(ret[2]))
+            # fz_trigger/down_force는 시그니처 유지용(미사용)
 
-            def _get_current_z():
-                ret = get_current_posx(DR_BASE)
-                pos = ret[0] if isinstance(ret, tuple) else ret
-                return float(pos[2])
-
-            target_z = end_pos_list[2]
-
-            task_compliance_ctrl(stx=[3000, 3000, 100, 100, 100, 100])
-            set_desired_force(fd=[0, 0, down_force, 0, 0, 0], dir=[0, 0, 1, 0, 0, 0], mod=DR_FC_MOD_REL)
+            log("[3] (액체) 믹싱 다운 위치로 하강")
+            movel(posx(end_pos_list), vel=10, acc=10, ref=DR_BASE)
             wait(0.1)
 
-            log("1. 힘 감지 모드로 하강 시작 (외력 대기)")
-            amovel(posx(end_pos_list), vel=10, acc=10, ref=DR_BASE)
+            log(f"[3] (액체) 베이스 기준 위아래 혼합 시작 ({mixing_duration}초)")
+            period_s = 1.2
+            repeat_calc = max(1, int(mixing_duration / period_s))
 
-            while True:
-                fz = _get_fz()
-                log(f'현재 fz: {fz:.2f} N, 목표: {fz_trigger} N')
-                if _get_fz() >= fz_trigger:
-                    log(f"[감지] 외력 도달 ({fz_trigger}N). Wiggle을 시작합니다.")
-                    break
-                wait(0.1)
-
-            ret_pos = get_current_posx(DR_BASE)
-            curr_pos = list(ret_pos[0]) if isinstance(ret_pos, tuple) else list(ret_pos)
-
-            log("2. 아래로 힘주며 하강 및 Wiggle 동시 수행")
-            while True:
-                curr_z = _get_current_z()
-                if curr_z <= target_z:
-                    log(f"[도달] 목표 높이 도달 (현재 Z: {curr_z:.2f})")
-                    break
-
-                curr_pos[2] -= 2.0
-                if curr_pos[2] < target_z:
-                    curr_pos[2] = target_z
-                movel(posx(curr_pos), vel=10, acc=10, ref=DR_BASE)
-
-                move_periodic(
-                    amp=[0, 0, -5, 0, 0, 25],
-                    period=1.0,
-                    atime=0.2,
-                    repeat=1,
-                    ref=DR_TOOL
-                )
-
-            log(f"3. 목표 도달 후 추가 혼합 ({mixing_duration}초)")
-            repeat_calc = max(1, int(mixing_duration / 2.0))
             move_periodic(
-                amp=[0, 0, -5, 0, 0, 15],
-                period=2.0,
+                amp=[0, 0, 15, 0, 0, 0],   # Z 15mm 위아래 (10~25 튜닝)
+                period=period_s,
                 atime=0.2,
                 repeat=repeat_calc,
-                ref=DR_TOOL
+                ref=DR_BASE                # ✅ 핵심: 바닥(Z축) 기준으로 수직 위아래
             )
 
-            release_force()
-            release_compliance_ctrl()
-            wait(0.2)
+            log("[3] (액체) 혼합 완료 후 안전 위치로 상승")
+            movel(posx(self.pos_mixer_mix_safe), vel=60, acc=60, ref=DR_BASE)
+            wait(0.1)
 
         # =========================
         # 전체 흐름 제어
@@ -237,15 +193,8 @@ class TaskMixing(Node):
         pick_and_ready_mixer()
         wait(0.2)
 
-        # 잡은 상태에서 시작하고 싶은 경우
-        # movel(posx(self.pos_mixer_mix_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
-
-        log("[3] 순응 제어 기반 혼합 시작")
-        mixer_descend_and_wiggle(
-            end_pos_list=self.pos_mixer_mix_down,
-            fz_trigger=7.0,
-            down_force=-10.0
-        )
+        # 액체 혼합 (외력 없이, 베이스 기준 위아래 move_periodic)
+        mixer_descend_and_wiggle(end_pos_list=self.pos_mixer_mix_down)
 
         # ✅ 위로는 천천히 / 아래로는 빠르게 (탁탁)
         shake_off_before_return(
