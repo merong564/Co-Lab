@@ -442,8 +442,16 @@
         if (Date.now() - lastUpdateTimestamp > 3000) return;
 
         if(data.current_angle !== undefined) { 
-            document.getElementById('robot_angle').innerText = data.current_angle; 
-            document.getElementById('cup-icon').style.transform = `rotate(${data.current_angle}deg)`; 
+            // 💡 [수정 내용] 태그가 화면에 실제로 존재하는지 먼저 확인(if)하는 안전장치 추가!
+            const angleElement = document.getElementById('robot_angle');
+            const cupElement = document.getElementById('cup-icon');
+            
+            if (angleElement) {
+                angleElement.innerText = data.current_angle; 
+            }
+            if (cupElement) {
+                cupElement.style.transform = `rotate(${data.current_angle}deg)`; 
+            }
         }
     });
 
