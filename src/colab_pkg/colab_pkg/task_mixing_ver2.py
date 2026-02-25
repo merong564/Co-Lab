@@ -308,10 +308,10 @@ class TaskMixing(Node):
         # =========================
         # 전체 흐름 제어
         # =========================
-        # pick_and_place_beaker()
+        pick_and_place_beaker()
 
-        # pick_and_ready_mixer()
-        # wait(0.2)
+        pick_and_ready_mixer()
+        wait(0.2)
 
         # 액체 혼합 (외력 없이, 베이스 기준 위아래 move_periodic)
         mixer_descend_and_wiggle(end_pos_list=self.pos_mixer_mix_down)
