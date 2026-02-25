@@ -4,7 +4,7 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260226_v07 (Strict Core Preservation + Phase Force Shield)
+[Version] 260226_v09 (Strict Core Preservation + Cycle Time & QA)
 """
 
 import rclpy
@@ -66,8 +66,12 @@ class UserInterface(Node):
         self.last_total_count = 0 
         self.is_first_msg = True 
 
-        # 💡 [추가 기능 1] 무게 토픽을 완전히 잠가버리는 영구 차단 플래그
         self.is_weight_blocked = False
+
+        # 💡 [추가] 지표 계산용 변수 도입 (Cycle Time & QC 판별)
+        self.cycle_start_time = 0.0
+        self.current_cycle_time = 0.0
+        self.recipe_failed_flag = False
 
     def loop_callback(self):
         self.check_firebase_commands()
@@ -87,8 +91,12 @@ class UserInterface(Node):
                         ui_time = cmd_data.get('timestamp', 0)
                         self.get_logger().info(f'▶ 작업 시작(Start) 신호 수신됨 (UI 클릭 시간: {ui_time})')
                         
-                        # 💡 [추가] 새 작업 시작 시 차단 스위치 해제
                         self.is_weight_blocked = False
+
+                        # 💡 [추가] 새 레시피 시작 시: 타이머 가동 및 실패 플래그 리셋
+                        self.cycle_start_time = time.time()
+                        self.current_cycle_time = 0.0
+                        self.recipe_failed_flag = False
 
                         self.current_target_weight = float(cmd_data.get('target_weight', 0.0))
                         self.current_material = cmd_data.get('material', 'Unknown')
@@ -97,9 +105,10 @@ class UserInterface(Node):
                     elif cmd_type == 'emergency_stop':
                         self.stop_pub.publish(String(data="STOP"))
                         self.get_logger().warn("🚨 EMERGENCY STOP Signal Sent!")
+                        # 💡 [추가] 긴급 정지 시 무조건 레시피 실패 처리
+                        self.recipe_failed_flag = True
                     
                     elif cmd_type == 'tare':
-                         # 💡 [추가] 영점 조절 시 차단 스위치 해제
                          self.is_weight_blocked = False
                          self.get_logger().info("⚖️ Tare Command Received (Weight Block Released)")
 
@@ -114,7 +123,6 @@ class UserInterface(Node):
         req = RobotCommand.Request()
         req.mode = "FULL"
         
-        # 💡 [추가 기능 2] 에탄올, 아세톤, 물 포맷에 맞춰 정규표현식 변경 (기존 로직 유지)
         match = re.search(r'에탄올(\d+(\.\d+)?)/아세톤(\d+(\.\d+)?)/물(\d+(\.\d+)?)', self.current_material)
         if match:
             req.targets = ["LARGE", "SMALL1", "SMALL2"]
@@ -133,12 +141,21 @@ class UserInterface(Node):
     def service_response_callback(self, future):
         try:
             response = future.result()
+            
+            # 💡 [추가] 서비스 응답을 받은 즉시 Cycle Time 확정
+            if self.cycle_start_time > 0:
+                self.current_cycle_time = time.time() - self.cycle_start_time
+
             if response.success:
-                self.get_logger().info(f"✅ 서비스 성공: {response.message}")
+                self.get_logger().info(f"✅ 서비스 성공 (소요시간: {self.current_cycle_time:.2f}s)")
             else:
                 self.get_logger().warn(f"❌ 서비스 실패: {response.message}")
+                # 💡 [추가] 서비스가 실패했다고 응답 오면 레시피 실패 처리
+                self.recipe_failed_flag = True
+                
         except Exception as e:
             self.get_logger().error(f"서비스 호출 중 에러 발생: {e}")
+            self.recipe_failed_flag = True
 
     def upload_to_firebase(self):
         try:
@@ -178,34 +195,43 @@ class UserInterface(Node):
         
     def save_experiment_history(self, msg):
         try:
+            # 💡 [추가] 아직 확정되지 않았다면 임시로라도 현재까지의 시간을 기록
+            if self.current_cycle_time == 0.0 and self.cycle_start_time > 0:
+                self.current_cycle_time = time.time() - self.cycle_start_time
+
             target_w = self.current_target_weight
             final_w = round(self.latest_weight, 2)
-            
             ss_error_g = round(abs(target_w - final_w), 2)
-            local_error_rate = round(msg.error_rate, 2)
-
+            
             history_data = {
                 'timestamp': int(time.time() * 1000),
                 'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'material': self.current_material,
                 'target_weight': target_w,
                 'final_weight': final_w,
-                'success': True if local_error_rate <= 10.0 else False,
+                # 💡 [추가] 엄격한 QC 적용: 플래그가 True면 무조건 False(실패) 기록
+                'success': not self.recipe_failed_flag,
                 'ss_error_g': ss_error_g,
-                'cycle_time': round(msg.last_cycle_time, 2)
+                # 💡 [추가] 직접 계산한 정확한 왕복 시간 기록
+                'cycle_time': round(self.current_cycle_time, 2)
             }
             
             db_ref = db.reference('experiment_history')
             new_record = db_ref.push(history_data)
             
-            self.get_logger().info(f"💾 [DB 저장 성공 - 기본 히스토리] ID: {new_record.key}")
+            self.get_logger().info(f"💾 [DB 저장 성공 - 기본 히스토리] ID: {new_record.key} | 최종판정: {'성공' if not self.recipe_failed_flag else '실패'}")
         except Exception as e:
             self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
 
     def control_metrics_callback(self, msg):
         try:
             current_pour_speed = round(self.latest_system_status.get('pour_speed', 0.0), 2)
-            current_error_rate = round(self.latest_system_status.get('error_rate', 0.0), 2)
+            current_error_rate = round(msg.error_rate, 2)
+
+            # 💡 [추가] 붓기 작업 중 하나라도 오차율 10.0% 초과 시 레시피 전체를 실패로 낙인
+            if current_error_rate > 10.0:
+                self.recipe_failed_flag = True
+                self.get_logger().warn(f"🚨 오차 허용치 초과 감지 ({current_error_rate}%). 레시피 실패 처리 예약.")
 
             metrics_data = {
                 'timestamp': int(time.time() * 1000),
@@ -224,7 +250,6 @@ class UserInterface(Node):
             }
             
             db_ref = db.reference('control_metrics_history')
-            # 💡 [오류 수정] 이전 코드의 push() NameError를 방지하기 위해 db_ref.push()로 수정 유지
             new_record = db_ref.push(metrics_data) 
             
             self.get_logger().info(f"📊 [제어 지표 DB 저장 완료] Pour Speed & Error Rate 포함됨. ID: {new_record.key}")
@@ -236,22 +261,17 @@ class UserInterface(Node):
             self.get_logger().error(f"❌ DB 제어 지표 저장 실패: {e}")
 
     def joint_callback(self, msg): 
-        # 💡 [오류 수정] 문법 에러(for msg.position) 방지를 위해 rad in msg.position 유지
         self.latest_joints = [math.degrees(rad) for rad in msg.position]
         self.last_joint_time = time.time()
 
     def weight_callback(self, msg): 
-        # 💡 [추가 기능 연동] 대소문자 관계없이 완벽 인식
         current_phase = self.latest_system_status.get('phase', 'Ready').lower()
         
-        # 믹싱 및 복귀 단계에 진입하면 '영구 차단 스위치'를 켭니다.
         if current_phase in ["mixing", "return"]:
             self.is_weight_blocked = True
             
-        # 🛡️ [핵심 방어 로직] 차단 스위치가 켜져 있으면 데이터 무시하고 0.0 전달
         if self.is_weight_blocked:
             self.latest_weight = 0.0
-            # 차단 모드에서는 로그도 띄우지 않고 가짜 신호를 완벽히 무시합니다.
         else:
             self.latest_weight = float(msg.data)
             self.get_logger().info(f"📡 [UI 브릿지 수신]: {self.latest_weight:.1f} g")
