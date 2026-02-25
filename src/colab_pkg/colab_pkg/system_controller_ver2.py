@@ -4,6 +4,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from colab_interfaces.srv import RobotCommand
+import time
 
 ROBOT_ID = "dsr01"
 
@@ -15,6 +16,8 @@ class SystemController(Node):
 
         # 중단 요청 플래그
         self.is_stop_requested = False
+
+        self.current_held_target = ""
 
         # ✅ [추가] stop 토픽 퍼블리셔 (/dsr01/stop)
         self.pub_stop = self.create_publisher(
@@ -53,6 +56,7 @@ class SystemController(Node):
         self.cli_transfer = self.create_client(RobotCommand, 'execute_transfer', callback_group=self.callback_group)
         self.cli_pouring = self.create_client(RobotCommand, 'execute_pouring', callback_group=self.callback_group)
         self.cli_mixing = self.create_client(RobotCommand, 'execute_mixing', callback_group=self.callback_group)
+        self.cli_recovery = self.create_client(RobotCommand, 'execute_recovery', callback_group=self.callback_group) # [추가] 복구 노드 클라이언트
 
         self.check_services_availability()
 
@@ -76,7 +80,8 @@ class SystemController(Node):
             ('ScaleDriver', self.cli_scale),
             ('TaskTransfer', self.cli_transfer),
             ('TaskPouring', self.cli_pouring),
-            ('TaskMixing', self.cli_mixing)
+            ('TaskMixing', self.cli_mixing),
+            ('TaskRecovery', self.cli_recovery) # [추가] 복구 노드 연결 확인
         ]
         for name, client in clients:
             self.get_logger().info(f'Waiting for {name} server...')
@@ -89,6 +94,10 @@ class SystemController(Node):
         self.get_logger().info("[Process Start]")
 
         self.is_stop_requested = False
+        # current_target = "" # [추가] 로봇이 현재 파지 중인 물체 추적
+
+        # [추가] 프로세스 시작 시 초기화
+        self.current_held_target = ""
 
         try:
             for target, weight in zip(request.targets, request.target_weights):
@@ -101,6 +110,7 @@ class SystemController(Node):
                 if self.check_stop(): raise Exception("Process Aborted by User")
                 if not await self.call_service(self.cli_transfer, mode="PICKUP", targets=[target]):
                     raise Exception(f"Transfer Pickup Failed for {target}")
+                # current_target = target # [추가] 픽업 성공, 현재 물체 파지 중
 
                 if self.check_stop(): raise Exception("Process Aborted by User")
                 if not await self.call_service(self.cli_pouring, mode="POUR", targets=[target], target_weights=[weight]):
@@ -109,14 +119,17 @@ class SystemController(Node):
                 if self.check_stop(): raise Exception("Process Aborted by User")
                 if not await self.call_service(self.cli_transfer, mode="RETURN", targets=[target]):
                     raise Exception(f"Transfer Return Failed for {target}")
+                # current_target = "" # [추가] 리턴 성공, 빈 손 상태
 
             if self.check_stop(): raise Exception("Process Aborted by User")
             if not await self.call_service(self.cli_mixing, mode="MIX", mixing_duration=request.mixing_duration):
                 raise Exception("Mixing Failed")
 
             if self.check_stop(): raise Exception("Process Aborted by User")
+            # current_target = "BEAKER" # [추가] 믹싱 완료 후 비커 파지 상태로 간주
             if not await self.call_service(self.cli_transfer, mode="RETURN", targets=["BEAKER"]):
                 raise Exception("Final Return Failed for BEAKER")
+            # current_target = "" # [추가] 비커 리턴 성공
 
             response.success = True
             response.message = "All tasks completed successfully."
@@ -126,6 +139,37 @@ class SystemController(Node):
             response.success = False
             response.message = str(e)
             self.get_logger().error(f"[Process Failed/Aborted] {e}")
+
+            # [추가] 에러 발생 시 자동 복구 시퀀스 진행
+            self.get_logger().info("=== [Auto-Recovery Sequence Initiated] ===")
+
+            # [수정] 1. 급정지로 인한 로봇의 물리적 흔들림(여진)이 완전히 멈출 때까지 대기
+            self.get_logger().info("Waiting for physical vibrations to settle...")
+            time.sleep(1.5)
+            
+            # 1. 락 해제를 위해 RESET 발행
+            self.is_stop_requested = False
+            msg = String()
+            msg.data = "RESET"
+            self.pub_stop.publish(msg)
+            self.get_logger().info("Published 'RESET' to unlock working nodes.")
+            
+            # 2. 노드들이 RESET을 처리할 수 있도록 잠시 대기
+            time.sleep(0.5)
+            
+            # 3. 복구 서비스 호출
+            self.get_logger().info(f"Calling execute_recovery with target: '{self.current_held_target}'")
+            rec_req = RobotCommand.Request()
+            rec_req.mode = "RECOVER"
+            if self.current_held_target:
+                rec_req.targets = [self.current_held_target]
+            
+            rec_result = await self.cli_recovery.call_async(rec_req)
+            
+            if rec_result.success:
+                self.get_logger().info("=== [Auto-Recovery Completed Successfully] ===")
+            else:
+                self.get_logger().error(f"=== [Auto-Recovery Failed]: {rec_result.message} ===")
 
         return response
 
@@ -158,9 +202,10 @@ class SystemController(Node):
             self.get_logger().info(f"    Success: {result.message}")
             return True
         else:
-            # [추가] 모든 서비스에 대해 False 반환 시 서비스명 및 모드를 명시하여 로그 출력
+            self.current_held_target = getattr(result, "held_object", "")
+            if self.current_held_target:
+                self.get_logger().warn(f"    [State Updated] Node reported holding: '{self.current_held_target}'")
             self.get_logger().error(f"    [Service Error] {client.srv_name} returned False for mode: {mode}")
-            
             self.get_logger().error(f"    Failed: {result.message}")
             return False
 

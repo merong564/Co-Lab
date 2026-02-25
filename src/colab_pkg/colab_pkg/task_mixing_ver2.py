@@ -21,7 +21,8 @@ ROBOT_TCP = "GripperDA_v1"
 DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
-STOP_REQUESTED = False # [추가] STOP 상태를 저장할 전역 변수
+STOP_REQUESTED = False
+HELD_OBJECT = "" # [추가]
 
 # ===============================
 # 2. 서비스 노드 클래스
@@ -66,13 +67,14 @@ class TaskMixing(Node):
         self.get_logger().info("TaskMixing Ready. Service: execute_mixing")
 
     def execute_mixing_callback(self, request, response):
-        global STOP_REQUESTED # [추가]
+        global STOP_REQUESTED, HELD_OBJECT # [수정]
 
         # [추가] 시작 시 STOP이면 즉시 실패 응답
         if STOP_REQUESTED:
             self.get_logger().info(f"##### Service Response = False ######")
             response.success = False
             response.message = "STOP already requested"
+            response.held_object = HELD_OBJECT # [추가]
             return response
         
         mode = (getattr(request, "mode", "") or "").strip().upper()
@@ -89,10 +91,12 @@ class TaskMixing(Node):
             
             response.success = True
             response.message = f"{mode} Mixing Completed Successfully"
+            response.held_object = HELD_OBJECT # [추가]
         except Exception as e:
             self.get_logger().error(f"Task failed: {e}")
             response.success = False
             response.message = f"{mode} Mixing Failed: {str(e)}"
+            response.held_object = HELD_OBJECT # [추가]
 
         return response
 
@@ -103,11 +107,16 @@ class TaskMixing(Node):
         if cmd == "STOP":
             STOP_REQUESTED = True
             self.get_logger().warn("[STOP] received -> flag set (node stays alive)")
-            try:
-                from DSR_ROBOT2 import stop
-                stop(0)
-            except Exception:
-                pass
+
+            # from DSR_ROBOT2 import stop, DR_QSTOP
+            # stop(0)
+            # self.get_logger().warn("[STOP] Robot stop() called (DR_QSTOP)")
+
+            # try:
+            #     from DSR_ROBOT2 import stop
+            #     stop(0)
+            # except Exception:
+            #     pass
         elif cmd == "RESET":
             STOP_REQUESTED = False
             self.get_logger().info("[RESET] received -> flag cleared")
@@ -121,18 +130,18 @@ class TaskMixing(Node):
             amovel, amovej, check_motion # [추가] 비동기 함수 임포트
         )
 
-        global STOP_REQUESTED # [추가]
+        global STOP_REQUESTED, HELD_OBJECT # [수정]
 
         # [추가] STOP 확인 및 예외 발생
         def _check_stop(tag=""):
             global STOP_REQUESTED
             if STOP_REQUESTED:
                 print(f'stop 요청 들어옴 at: {tag}')
-                try:
-                    from DSR_ROBOT2 import stop
-                    stop(0)
-                except Exception:
-                    pass
+                # try:
+                #     from DSR_ROBOT2 import stop
+                #     stop(0)
+                # except Exception:
+                #     pass
                 raise RuntimeError(f"STOP at: {tag}")
 
         _check_stop("before task start") # [추가] 시작 시점 확인
@@ -198,6 +207,7 @@ class TaskMixing(Node):
             set_digital_output(1, OFF)
             set_digital_output(2, ON)
             wait(2.0)
+            HELD_OBJECT = "" # [추가]
 
         def gripper_close():
             log("그리퍼 닫기")
@@ -211,6 +221,7 @@ class TaskMixing(Node):
             movel(posx(self.pos_beaker_pick_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             movel(posx(self.pos_beaker_pick), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             gripper_close()
+            HELD_OBJECT = "BEAKER"
             movel(posx(self.pos_beaker_pick_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
 
             movel(posx(self.pos_beaker_place_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
@@ -224,6 +235,7 @@ class TaskMixing(Node):
             movel(posx(self.pos_mixer_pick_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             movel(posx(self.pos_mixer_pick), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             gripper_close()
+            HELD_OBJECT = "MIXER"
             movel(posx(self.pos_mixer_pick_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             movel(posx(self.pos_mixer_mix_safe), vel=L_VEL, acc=L_ACC, ref=DR_BASE)
             log("믹서 대기 위치 이동 완료")
