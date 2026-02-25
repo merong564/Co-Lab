@@ -69,12 +69,16 @@ class TaskTransfer(Node):
             # 가능하면 즉시 모션 정지 시도
             try:
                 from DSR_ROBOT2 import stop, DR_QSTOP
-                stop(DR_QSTOP)
+                stop(0)
+                # stop(DR_QSTOP)
+                # stop(0)
                 self.get_logger().warn("[STOP] Robot stop() called (DR_QSTOP)")
             except Exception:
                 try:
                     from DSR_ROBOT2 import stop, DR_SSTOP
-                    stop(DR_SSTOP)
+                    stop(0)
+                    # stop(DR_SSTOP)
+                    # stop(2)
                     self.get_logger().warn("[STOP] Robot stop() called (DR_SSTOP)")
                 except Exception:
                     pass
@@ -123,13 +127,16 @@ class TaskTransfer(Node):
 def get_poses(posx_func):
     return {
         "LARGE": {
-            "PICK_DOWN": posx_func(306.636, -66.725,  109.141, 91.356, 91.786, 90.102),
-            "PICK_UP":   posx_func(306.636, -66.725, 257.898, 91.356, 91.786, 90.102),
-            "POUR_UP": posx_func(585.440, 157.760, 242.631, 91.920, 97.360, 88.550),
-            "POUR_READY": posx_func(585.440, 157.760, 180.631, 91.920, 97.360, 88.550),
-            "RETURN_READY": posx_func(303.736, 81.616, 230.386, 91.920, 97.360, 88.550),
-            "RETURN_UP": posx_func(417.368, 608.704, 260.356, 90.362, 91.682, 89.077),
-            "RETURN_DOWN": posx_func(417.368, 608.704, 104.231, 90.362, 91.682, 89.077)
+            "PICK_DOWN": posx_func(297.499, -60.308, 68.716, 88.614, 96.211, 91.805), # [수정]
+            "PICK_UP":   posx_func(287.293, -47.214, 222.645, 88.718, 96.254, 91.727), # [수정]
+            # "POUR_UP": posx_func(585.440, 384.931, 242.631, 91.920, 97.360, 88.550), # [수정]
+            "POUR_READY": posx_func(561.045, 144.760, 188.965, 91.920, 97.358, 88.558), # [수정]
+            # RETURN_READY는 새 흐름에서 사용되지 않으므로 제거 또는 무시 가능
+            "RETURN_UP": posx_func(398.040, 351.050, 326.608, 90.329, 93.577, 89.530), # [수정]
+            "RETURN_DOWN": posx_func(389.408, 563.410, 72.182, 91.859, 98.698, 89.033), # [수정]
+            "AFTER_RETURN": posx_func(371.852, 520.254, 220.882, 89.661, 92.225, 89.338), # [수정]
+            "AFTER_RETURN_UP": posx_func(355.186, 533.297, 413.718, 89.688, 92.114, 88.361), # [수정]
+            "FINAL_POS": posx_func(309.545, 313.500, 141.890, 89.844, 90.996, 92.951) # [수정]
         },
         "SMALL1": {
             "PICK_DOWN": posx_func(333.096, 373.067, 138.164, 91.215, 89.984, 92.903),
@@ -186,10 +193,13 @@ def perform_task(mode, tube_type):
     def _check_stop(tag=""):
         global STOP_REQUESTED
         if STOP_REQUESTED:
+            print('stop 요청 들어옴')
             # 가능한 경우, 추가 정지 시도
             try:
                 from DSR_ROBOT2 import stop, DR_QSTOP
-                stop(DR_QSTOP)
+                stop(0)
+                # stop(DR_QSTOP)
+                # stop(2)
             except Exception:
                 pass
             raise RuntimeError(f"STOP at: {tag}")
@@ -199,15 +209,49 @@ def perform_task(mode, tube_type):
 
     # [추가] 모션 및 대기 중 STOP 플래그를 실시간으로 감시하는 커스텀 함수 정의
     def custom_movel(*args, **kwargs):
-        amovel(*args, **kwargs)
-        time.sleep(0.1) # 모션 시작 대기
+        # [추가] 이전 모션이 완전히 끝날 때까지 대기하여 동기화 강제
         while check_motion() == 1:
+            print('이전 모션 중', flush=True)
+            _check_stop("wait previous motion end")
+            time.sleep(0.05)
+
+        amovel(*args, **kwargs)
+
+        # time.sleep(0.1) # 모션 시작 대기
+        wait_start = time.time()
+        while check_motion() == 0 and (time.time() - wait_start) < 1.0:
+            print('movel 모션 중인데 안 움직이는 중', flush=True)
+            _check_stop("wait motion start")
+            time.sleep(0.05)
+
+        # [추가] 일시적인 상태값 0 반환으로 인한 조기 종료 방지
+        idle_count = 0 # [추가]
+        while True: # [추가] 기존 while check_motion() == 1: 대체
+            print('movel 모션 중', flush=True)
+            if check_motion() == 0: # [추가]
+                idle_count += 1 # [추가]
+            else: # [추가]
+                idle_count = 0 # [추가]
+                
+            if idle_count >= 3: # [추가] 0.15초(0.05초 * 3회) 연속 정지 확인 시 완전 탈출
+                break # [추가]
+                
             _check_stop("during movel")
             time.sleep(0.05)
 
     def custom_movej(*args, **kwargs):
+        # [추가] 이전 모션이 완전히 끝날 때까지 대기하여 동기화 강제
+        while check_motion() == 1:
+            _check_stop("wait previous motion end")
+            time.sleep(0.05)
+
         amovej(*args, **kwargs)
-        time.sleep(0.1) # 모션 시작 대기
+        # time.sleep(0.1) # 모션 시작 대기
+        wait_start = time.time()
+        while check_motion() == 0 and (time.time() - wait_start) < 1.0:
+            _check_stop("wait motion start")
+            time.sleep(0.05)
+            
         while check_motion() == 1:
             _check_stop("during movej")
             time.sleep(0.05)
@@ -256,6 +300,8 @@ def perform_task(mode, tube_type):
             gripper_open()
 
     def _pickup_tube_common(P):
+        
+        print('홈위치이동')
         _check_stop("before movej ready")
         custom_movej(J_READY, vel=VEL, acc=ACC)
         wait(0.5)
@@ -264,22 +310,26 @@ def perform_task(mode, tube_type):
         target_gripper_open()
 
         _check_stop("before movel PICK_UP")
-        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        #custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before movel PICK_DOWN")
-        custom_movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        #custom_movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        movel(P["PICK_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before gripper_close")
         gripper_close()
 
         _check_stop("before movel PICK_UP(2)")
-        custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        # custom_movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
-        _check_stop("before movel POUR_UP")
-        custom_movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        #_check_stop("before movel POUR_UP")
+        #custom_movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
         _check_stop("before movel POUR_READY")
-        custom_movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+        # custom_movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+        movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
 
     def pickup_beaker(P):
         _check_stop("before movej ready")
@@ -302,29 +352,38 @@ def perform_task(mode, tube_type):
         movel(P["PICK_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
 
     def return_large(P):
+        # _check_stop("before movel PICK_UP")
+        # movel(P["PICK_UP"], vel=100, acc=100, ref=DR_BASE)
+
+        # _check_stop("before movel PICK_DOWN")
+        # movel(P["PICK_DOWN"], vel=100, acc=100, ref=DR_BASE)
+
+        # _check_stop("before movel PICK_UP(2)")
+        # movel(P["PICK_UP"], vel=100, acc=100, ref=DR_BASE)
+
+        print('####################### 큰 시험관 리턴 시작 ############ ')
         _check_stop("before movel POUR_READY")
-        movel(P["POUR_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-        _check_stop("before movel POUR_UP")
-        movel(P["POUR_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
-
-        _check_stop("before movel RETURN_READY")
-        movel(P["RETURN_READY"], vel=VEL, acc=ACC, ref=DR_BASE)
+        movel(P["POUR_READY"], vel=100, acc=100, ref=DR_BASE)
+        print('푸어링 위치')
 
         _check_stop("before movel RETURN_UP")
-        movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        movel(P["RETURN_UP"], vel=100, acc=100, ref=DR_BASE)
+        print('리턴 업')
 
         _check_stop("before movel RETURN_DOWN")
-        movel(P["RETURN_DOWN"], vel=VEL, acc=ACC, ref=DR_BASE)
+        movel(P["RETURN_DOWN"], vel=100, acc=100, ref=DR_BASE)
+        print('리턴 다운')
 
-        _check_stop("before target_gripper_open")
-        target_gripper_open()
+        _check_stop("before movel AFTER_RETURN") # [추가]
+        movel(P["AFTER_RETURN"], vel=100, acc=100, ref=DR_BASE) # [추가]
+        print('리턴 후')
 
-        _check_stop("before movel RETURN_UP(2)")
-        movel(P["RETURN_UP"], vel=VEL, acc=ACC, ref=DR_BASE)
+        _check_stop("before movel AFTER_RETURN_UP") # [추가]
+        movel(P["AFTER_RETURN_UP"], vel=100, acc=100, ref=DR_BASE) # [추가]
+        print('리턴 후 업 위치')
 
-        _check_stop("before movej ready")
-        movej(J_READY, vel=VEL, acc=ACC)
+        _check_stop("before movel FINAL_POS") # [추가]
+        movel(P["FINAL_POS"], vel=100, acc=100, ref=DR_BASE) # [추가]
 
     def return_small(P):
         _check_stop("before movel POUR_READY")
