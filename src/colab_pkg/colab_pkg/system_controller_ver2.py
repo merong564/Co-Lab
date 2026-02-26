@@ -18,7 +18,7 @@ class SystemController(Node):
         # 중단 요청 플래그
         self.is_stop_requested = False
 
-        self.current_held_target = ""
+        self.current_held_object = ""
 
         self.current_phase = "Ready" # [추가] 현재 공정 상태 저장 변수
         self.prev_tcp_vel = 0.0 # [추가] 이전 속도 저장 변수
@@ -97,7 +97,7 @@ class SystemController(Node):
         # current_target = "" # [추가] 로봇이 현재 파지 중인 물체 추적
 
         # [추가] 프로세스 시작 시 초기화
-        self.current_held_target = ""
+        self.current_held_object = ""
         self.set_phase("Ready") # [수정] 상태 초기화 시 함수 사용
 
         try:
@@ -167,11 +167,11 @@ class SystemController(Node):
             time.sleep(0.5)
             
             # 3. 복구 서비스 호출
-            self.get_logger().info(f"Calling execute_recovery with target: '{self.current_held_target}'")
+            self.get_logger().info(f"Calling execute_recovery with target: '{self.current_held_object}'")
             rec_req = RobotCommand.Request()
             rec_req.mode = "RECOVER"
-            if self.current_held_target:
-                rec_req.targets = [self.current_held_target]
+            if self.current_held_object:
+                rec_req.targets = [self.current_held_object]
             
             rec_result = await self.cli_recovery.call_async(rec_req)
             
@@ -212,9 +212,9 @@ class SystemController(Node):
             self.get_logger().info(f"    Success: {result.message}")
             return True
         else:
-            self.current_held_target = getattr(result, "held_object", "")
-            if self.current_held_target:
-                self.get_logger().warn(f"    [State Updated] Node reported holding: '{self.current_held_target}'")
+            self.current_held_object = getattr(result, "held_object", "")
+            if self.current_held_object:
+                self.get_logger().warn(f"    [State Updated] Node reported holding: '{self.current_held_object}'")
             self.get_logger().error(f"    [Service Error] {client.srv_name} returned False for mode: {mode}")
             self.get_logger().error(f"    Failed: {result.message}")
             return False

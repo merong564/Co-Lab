@@ -38,7 +38,7 @@ class SafetyMonitor(Node):
         
         # [수정] 단일 고정 임계값 삭제 후 평시/접촉시 임계값 분리 및 동적 변수 선언
         self.DF_THRESH_NORMAL = 10.0 
-        self.DF_THRESH_HIGH = 20.0 
+        self.DF_THRESH_HIGH = 30.0 
         self.current_thresh = self.DF_THRESH_NORMAL # [추가]
 
         # 연속 발행 방지(초)
