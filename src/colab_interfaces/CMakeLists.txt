@@ -27,8 +27,9 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SystemStatus.msg"
+  "msg/ControlResult.msg"
+  "msg/ControlLive.msg"
   "srv/RobotCommand.srv"
-  "msg/ControlMetrics.msg"
 )
 
 ament_package()

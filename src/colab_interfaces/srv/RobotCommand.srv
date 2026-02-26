@@ -9,3 +9,4 @@ float32 mixing_duration    # 섞는 시간 [sec]
 # Response
 bool success             
 string message
+string held_object  # [추가] 에러 발생 시 현재 파지 중인 물체 전달용
