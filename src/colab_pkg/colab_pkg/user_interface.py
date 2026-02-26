@@ -4,7 +4,7 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260226_v25 (Hardware Tare Compensation + stop/impact)
+[Version] 260226_v26 (Emergency Tag in History)
 """
 
 import rclpy
@@ -56,7 +56,6 @@ class UserInterface(Node):
             
             self.create_subscription(String, 'stop/ui', self.stop_status_callback, 10)
             self.create_subscription(String, 'stop', self.stop_status_callback, 10)
-            # 💡 [여기 딱 한 줄만 추가되었습니다!] 외력 충돌 감지 토픽
             self.create_subscription(String, 'stop/impact', self.stop_status_callback, 10)
         
         self.timer = self.create_timer(0.1, self.loop_callback)
@@ -77,14 +76,17 @@ class UserInterface(Node):
         self.recipe_failed_flag = False
         self.is_cycle_running = False         
         
-        # 💡 [핵심] 하드웨어 영점 리셋을 무시하고 계속 누적해 나갈 베이스 무게
         self.base_accumulated_weight = 0.0 
         self.final_accumulated_weight = 0.0   
+        
+        # 💡 [추가] 긴급 중단 여부를 추적하는 변수
+        self.is_emergency_stopped = False
 
     def stop_status_callback(self, msg):
         text = msg.data.strip().upper()
         if text in ["STOP", "RECOVERY", "EMERGENCY"]:
             self.recipe_failed_flag = True
+            self.is_emergency_stopped = True  # 💡 [추가] 토픽 수신 시 긴급중단 플래그 ON
             self.latest_system_status['phase'] = 'Emergency' 
             try:
                 db.reference('system_stats/phase').set('Emergency')
@@ -118,9 +120,9 @@ class UserInterface(Node):
                         self.cycle_start_time = time.time()
                         self.current_cycle_time = 0.0
                         self.recipe_failed_flag = False
+                        self.is_emergency_stopped = False # 💡 [추가] 작업 시작 시 긴급중단 플래그 리셋
                         self.latest_pour_speed = 0.0
                         
-                        # 💡 새 레시피 시작 시 누적 베이스를 깔끔하게 0으로 초기화
                         self.base_accumulated_weight = 0.0
                         self.final_accumulated_weight = 0.0
                         self.is_cycle_running = True 
@@ -132,6 +134,7 @@ class UserInterface(Node):
                     elif cmd_type == 'emergency_stop':
                         self.stop_pub.publish(String(data="STOP"))
                         self.recipe_failed_flag = True
+                        self.is_emergency_stopped = True # 💡 [추가] UI 버튼 클릭 시 긴급중단 플래그 ON
                         self.latest_system_status['phase'] = 'Emergency'
                         db.reference('system_stats/phase').set('Emergency')
                         
@@ -177,12 +180,9 @@ class UserInterface(Node):
         try:
             current_phase = self.latest_system_status.get('phase', 'Ready').lower()
             
-            # 💡 [핵심 알고리즘 적용]
-            # 비커를 들어올리는 Mixing과 Return 단계에서는 무조건 0.0g 출력
             if current_phase in ['mixing', 'return']:
                 display_w = 0.0 
             else:
-                # 그 외의 단계(Transfer, Pouring)에서는 "이전까지의 누적 무게 + 현재 로드셀 무게"
                 display_w = round(self.base_accumulated_weight + self.latest_weight, 2)
 
             updates = {
@@ -203,8 +203,6 @@ class UserInterface(Node):
         old_phase = self.latest_system_status.get('phase', 'Ready')
         new_count = getattr(msg, 'total_count', 0)
 
-        # 믹싱 단계 진입 시 (비커를 물리적으로 들어올리기 직전), 
-        # 화면에 표시되던 완벽한 최종 누적 무게를 DB 저장용으로 확정(Keep) 짓습니다.
         if new_phase == 'Mixing' and old_phase != 'Mixing':
             self.final_accumulated_weight = self.base_accumulated_weight + self.latest_weight
             self.get_logger().info(f"📌 [무게 확정] 믹싱 진입 전 최종 누적 무게 저장: {self.final_accumulated_weight:.2f}g")
@@ -234,7 +232,6 @@ class UserInterface(Node):
         try:
             target_w = self.current_target_weight
             
-            # 실패 시점의 무게와 성공 시점의 믹싱 직전 무게 분기 처리
             if self.recipe_failed_flag:
                 final_w = round(self.base_accumulated_weight + self.latest_weight, 2)
             else:
@@ -249,6 +246,7 @@ class UserInterface(Node):
                 'target_weight': target_w,
                 'final_weight': final_w,  
                 'success': not self.recipe_failed_flag,
+                'is_emergency': self.is_emergency_stopped, # 💡 [추가] DB에 긴급중단 여부 기록
                 'ss_error_g': ss_error_g,
                 'cycle_time': round(self.current_cycle_time, 2)
             }
@@ -275,8 +273,6 @@ class UserInterface(Node):
             if current_error_rate > 10.0:
                 self.recipe_failed_flag = True
 
-            # 💡 [핵심 누적 알고리즘] 붓기 1회가 끝났다는 ControlResult 토픽이 올 때마다,
-            # 그 시점의 final_settled_weight를 베이스 무게에 턱! 하고 얹어줍니다.
             if hasattr(msg, 'final_settled_weight'):
                 added_weight = float(msg.final_settled_weight)
                 self.base_accumulated_weight += added_weight
@@ -319,7 +315,6 @@ class UserInterface(Node):
     def joint_callback(self, msg): pass
     
     def weight_callback(self, msg): 
-        # 로드셀이 중간에 0으로 떨어지든 말든, 측정한 값만 정직하게 갱신
         self.latest_weight = float(msg.data)
 
 def main(args=None):
