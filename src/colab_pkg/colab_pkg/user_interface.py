@@ -4,7 +4,7 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260226_v17 (True Cycle Time & Final Weight Keeper)
+[Version] 260226_v18 (End-of-Cycle Save Logic)
 """
 
 import rclpy
@@ -67,12 +67,14 @@ class UserInterface(Node):
         self.current_target_weight = 0.0
         self.current_material = "Unknown"
         
-        # 💡 [핵심 추가] 진짜 사이클 타임과 최종 무게를 계산하기 위한 상태 변수들
+        self.last_total_count = 0 
+        self.is_first_msg = True
+        
         self.cycle_start_time = 0.0
         self.current_cycle_time = 0.0
         self.recipe_failed_flag = False
-        self.is_cycle_running = False         # 현재 작업이 진행 중인지 여부
-        self.final_accumulated_weight = 0.0   # 믹싱 직전 비커에 담긴 최종 누적 무게 저장용
+        self.is_cycle_running = False         
+        self.final_accumulated_weight = 0.0   
 
     def stop_status_callback(self, msg):
         text = msg.data.strip().upper()
@@ -83,7 +85,7 @@ class UserInterface(Node):
                 db.reference('system_stats/phase').set('Emergency')
             except Exception:
                 pass
-            self.get_logger().warn(f"🚨 [비상/복구 감지] 시스템 중단. UI 게이지 강제 초기화! 원인: {text}")
+            self.get_logger().warn(f"🚨 [비상/복구 감지] 시스템 중단. 원인: {text}")
 
     def loop_callback(self):
         self.check_firebase_commands()
@@ -103,7 +105,6 @@ class UserInterface(Node):
                         ui_time = cmd_data.get('timestamp', 0)
                         self.get_logger().info(f'▶ 작업 시작(Start) 신호 수신됨 (UI 클릭 시간: {ui_time})')
 
-                        # 💡 [수정] 작업 시작 버튼을 누르는 순간 타이머 ON 및 변수 초기화
                         self.cycle_start_time = time.time()
                         self.current_cycle_time = 0.0
                         self.recipe_failed_flag = False
@@ -117,7 +118,6 @@ class UserInterface(Node):
                     
                     elif cmd_type == 'emergency_stop':
                         self.stop_pub.publish(String(data="STOP"))
-                        self.get_logger().warn("🚨 EMERGENCY STOP Signal Sent from UI!")
                         self.recipe_failed_flag = True
                         self.latest_system_status['phase'] = 'Emergency'
                         db.reference('system_stats/phase').set('Emergency')
@@ -145,18 +145,13 @@ class UserInterface(Node):
             req.target_weights = [float(cmd_data.get('target_weight', 0.0))]
         
         req.mixing_duration = float(cmd_data.get('mixing_duration', 0.0))
-
-        self.get_logger().info(f"📤 서비스 요청 보냄: Targets={req.targets}, Weights={req.target_weights}g, Mix={req.mixing_duration}s")
-        
         self.future = self.cli.call_async(req)
         self.future.add_done_callback(self.service_response_callback)
 
     def service_response_callback(self, future):
         try:
             response = future.result()
-            if response.success:
-                self.get_logger().info(f"✅ 컨트롤러 서비스 완료 응답 수신")
-            else:
+            if not response.success:
                 self.get_logger().warn(f"❌ 서비스 실패: {response.message}")
                 self.recipe_failed_flag = True
         except Exception as e:
@@ -174,41 +169,38 @@ class UserInterface(Node):
                 updates['robot_status/phase'] = self.latest_system_status.get('phase', 'Ready')
                 updates['robot_status/velocity'] = self.latest_system_status.get('tcp_vel', 0)
                 updates['robot_status/acceleration'] = self.latest_system_status.get('tcp_acc', 0)
-            
             db.reference().update(updates)
         except Exception as e:
-            self.get_logger().error(f"❌ 파이어베이스 업로드 실패: {e}")
+            pass
 
     def system_status_callback(self, msg):
         new_phase = getattr(msg, 'phase', 'Ready')
         old_phase = self.latest_system_status.get('phase', 'Ready')
+        new_count = getattr(msg, 'total_count', 0)
 
-        # 💡 [핵심 로직 1] 믹싱 단계 진입 시 (비커를 들어올리기 직전)
-        # 로드셀 무게가 0이 되기 전에 지금까지 누적된 진짜 최종 무게를 킵해둡니다!
+        # 💡 [핵심 보존] 믹싱 진입 시(비커 들어올리기 직전) 누적된 진짜 무게를 킵!
         if new_phase == 'Mixing' and old_phase != 'Mixing':
             self.final_accumulated_weight = self.latest_weight
             self.get_logger().info(f"📌 [무게 확정] 믹싱 진입 전 최종 누적 무게 저장: {self.final_accumulated_weight}g")
 
-        # 💡 [핵심 로직 2] 정상 종료 시점 (Return이 끝나고 다시 Ready가 될 때)
-        if self.is_cycle_running and new_phase == 'Ready' and old_phase == 'Return':
-            self.current_cycle_time = time.time() - self.cycle_start_time
-            self.save_experiment_history()
-            self.is_cycle_running = False # 사이클 종료
-            self.get_logger().info(f"⏱️ [사이클 종료] 진짜 소요 시간: {self.current_cycle_time:.2f}초")
-
-        # 💡 [핵심 로직 3] 비상 종료 시점 (Emergency 발생 시)
-        if self.is_cycle_running and new_phase == 'Emergency' and old_phase != 'Emergency':
-            self.current_cycle_time = time.time() - self.cycle_start_time
-            self.recipe_failed_flag = True
-            self.save_experiment_history()
-            self.is_cycle_running = False # 사이클 강제 종료
+        # 💡 [핵심 로직] 컨트롤러가 "작업 끝났어!" 하고 카운트를 올리는 그 순간!
+        if getattr(self, 'is_first_msg', True):
+            self.last_total_count = new_count
+            self.is_first_msg = False
+        elif new_count > self.last_total_count:
+            if self.is_cycle_running:
+                # 진짜 30초, 40초 걸린 리얼 소요시간 계산
+                self.current_cycle_time = time.time() - self.cycle_start_time
+                self.save_experiment_history()
+                self.is_cycle_running = False 
+            self.last_total_count = new_count
 
         self.latest_system_status = {
             "phase": new_phase,
             "tcp_vel": getattr(msg, 'tcp_vel', 0.0),       
             "tcp_acc": getattr(msg, 'tcp_acc', 0.0),       
             "pour_speed": getattr(self, 'latest_pour_speed', 0.0), 
-            "total_count": getattr(msg, 'total_count', 0),
+            "total_count": new_count,
             "success_count": getattr(msg, 'success_count', 0),
             "error_rate": round(getattr(msg, 'error_rate', 0.0), 2),
             "last_cycle_time": round(getattr(msg, 'last_cycle_time', 0.0), 2)
@@ -218,7 +210,7 @@ class UserInterface(Node):
         try:
             target_w = self.current_target_weight
             
-            # 💡 [수정] 비상정지 시에는 그 순간의 무게를, 정상이면 믹싱 직전에 킵해둔 무게를 사용합니다.
+            # 비상이면 에러난 그 순간의 무게, 정상이면 믹싱 직전에 아름답게 누적된 무게
             final_w = round(self.latest_weight if self.recipe_failed_flag else self.final_accumulated_weight, 2)
             ss_error_g = round(abs(target_w - final_w), 2)
             
@@ -227,10 +219,10 @@ class UserInterface(Node):
                 'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'material': self.current_material,
                 'target_weight': target_w,
-                'final_weight': final_w,  # 0g이 아닌 진짜 누적 무게가 들어감!
+                'final_weight': final_w,  
                 'success': not self.recipe_failed_flag,
                 'ss_error_g': ss_error_g,
-                'cycle_time': round(self.current_cycle_time, 2) # 진짜 사이클 타임!
+                'cycle_time': round(self.current_cycle_time, 2)
             }
             
             now = datetime.datetime.now()
@@ -241,7 +233,7 @@ class UserInterface(Node):
             db_ref = db.reference('experiment_history')
             db_ref.child(custom_key).set(history_data)
             
-            self.get_logger().info(f"💾 [DB 저장 성공] ID: {custom_key} | 결과무게: {final_w}g | 소요시간: {self.current_cycle_time:.2f}s | 판정: {'성공' if not self.recipe_failed_flag else '실패'}")
+            self.get_logger().info(f"💾 [DB 저장 성공] ID: {custom_key} | 결과무게: {final_w}g | 진짜 소요시간: {self.current_cycle_time:.2f}s | 판정: {'성공' if not self.recipe_failed_flag else '실패'}")
         except Exception as e:
             self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
 
@@ -249,12 +241,10 @@ class UserInterface(Node):
         try:
             current_pour_speed = round(getattr(msg, 'pour_speed', 0.0), 2)
             self.latest_pour_speed = current_pour_speed 
-            
             current_error_rate = round(getattr(msg, 'error_rate', 0.0), 2)
 
             if current_error_rate > 10.0:
                 self.recipe_failed_flag = True
-                self.get_logger().warn(f"🚨 오차 허용치 초과 감지 ({current_error_rate}%). 레시피 실패 처리 예약.")
 
             metrics_data = {
                 'timestamp': int(time.time() * 1000),
@@ -277,29 +267,21 @@ class UserInterface(Node):
             ms = int(time.time() * 100) % 100
             custom_key = f"{time_str}_{ms}_Metrics"
 
-            db_ref = db.reference('control_metrics_history')
-            db_ref.child(custom_key).set(metrics_data) 
-            
+            db.reference('control_metrics_history').child(custom_key).set(metrics_data) 
             self.latest_system_status['max_tilt_step'] = round(getattr(msg, 'max_tilt_step', 0.0), 2)
             self.latest_system_status['stop_threshold'] = round(getattr(msg, 'stop_threshold', 0.0), 2)
 
         except Exception as e:
-            self.get_logger().error(f"❌ DB 제어 지표 저장 실패: {e}")
+            pass
 
-    def joint_callback(self, msg): 
-        self.latest_joints = [math.degrees(rad) for rad in msg.position]
-        self.last_joint_time = time.time()
-
-    def weight_callback(self, msg): 
-        self.latest_weight = float(msg.data)
+    def joint_callback(self, msg): pass
+    def weight_callback(self, msg): self.latest_weight = float(msg.data)
 
 def main(args=None):
     rclpy.init(args=args)
     node = UserInterface()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    try: rclpy.spin(node)
+    except KeyboardInterrupt: pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
