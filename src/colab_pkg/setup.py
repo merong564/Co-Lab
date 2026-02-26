@@ -46,6 +46,7 @@ setup(
             'gripper_test = colab_pkg.gripper_test_ver2:main',
             'safety_monitor = colab_pkg.safety_monitor_ver2:main',
      	    'task_recovery  = colab_pkg.task_recovery_ver2:main',
+            'pour_amovel = colab_pkg.task_pouring_ctrl_ver2_amovel:main',
         ],
     },
 )

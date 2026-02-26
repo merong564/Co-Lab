@@ -9,3 +9,4 @@ float32 rise_time
 float32 settling_time
 float32 ss_error
 float32 error_rate     # 오차율 [%]
+float32 final_settled_weight

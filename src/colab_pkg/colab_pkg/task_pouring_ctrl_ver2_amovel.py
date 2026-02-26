@@ -39,15 +39,15 @@ STOP_REQUESTED = False
 TUBE_TUNING = {
     "LARGE": {
         "P_GAIN": 0.015, "D_GAIN": 0.08, "MAX_TILT_STEP": 1.0, "STOP_THRESHOLD": 0.5,
-        "INIT_TILT_STEP": 1.5, "TILT_BACK_ANGLE": -1.0 # [추가] 초기 틸팅 및 후퇴 각도 튜닝값
+        "INIT_TILT_STEP": 1.5, "TILT_BACK_ANGLE": -1.0 
     },
     "SMALL1": {
-        "P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 0.5, # [수정] 오버슛 방지를 위한 상향
-        "INIT_TILT_STEP": 0.9, "TILT_BACK_ANGLE": -1.5 # [추가] 초기 틸팅 및 후퇴 각도 튜닝값
+        "P_GAIN": 0.05, "D_GAIN": 0.5, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 0.5, 
+        "INIT_TILT_STEP": 0.5, "TILT_BACK_ANGLE": -1.5 # [수정] 0.8도에서 0.5도로 초기 틸팅 각도 하향
     },
     "SMALL2": {
-        "P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 0.5, # [수정] 오버슛 방지를 위한 상향
-        "INIT_TILT_STEP": 0.8, "TILT_BACK_ANGLE": -1.5 # [추가] 초기 틸팅 및 후퇴 각도 튜닝값
+        "P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 0.5, 
+        "INIT_TILT_STEP": 0.5, "TILT_BACK_ANGLE": -1.5 # [수정] 0.8도에서 0.5도로 초기 틸팅 각도 하향
     }
 }
 
@@ -266,7 +266,7 @@ def calculate_tilt_angle_pd(current_w: float, target_w: float, p_gain: float, d_
 
 def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARGE") -> bool:
     from DSR_ROBOT2 import movej, get_current_posj, amovel, movel, check_motion, posx, wait
-    from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS # [추가] 모드 변경 함수 임포트
+    from DSR_ROBOT2 import set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS 
     
     set_robot_mode(ROBOT_MODE_MANUAL)
     set_tcp(ROBOT_TCP)
@@ -274,10 +274,9 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     time.sleep(0.5)
 
     global STOP_REQUESTED
-    global P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD # [추가] 전역 변수 선언
+    global P_GAIN, MAX_TILT_STEP, STOP_THRESHOLD 
     global prev_error
 
-    # [추가] amovel, amovej, check_motion 임포트 (DSR_ROBOT2)
     def _check_stop(tag=""):
         global STOP_REQUESTED
         if STOP_REQUESTED:
@@ -305,53 +304,65 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
                 _check_stop("during movel")
                 time.sleep(0.05)
 
-    # [추가] movej, wait도 동일하게 커스텀 함수 작성 후 덮어쓰기
-    # movel = custom_movel
+    movel = custom_movel
 
-    # [추가] 타겟 종류에 맞는 튜닝 파라미터 설정
+    # [추가] 비동기 이동 및 실시간 무게 모니터링 함수
+    def async_tilt_and_monitor(delta_angle: float, threshold: float = 0.5) -> bool: # [수정] 임계값 기본값을 1.0g -> 0.5g으로 하향
+        target_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, delta_angle)
+        
+        # [수정] 초기 탐색 틸팅 속도를 대폭 하향 (vel=10, acc=20)하여 왈칵 쏟아짐 방지
+        amovel(target_pos, vel=10, acc=20, ref=1, mod=1)
+        
+        wait_start = time.time()
+        while check_motion() == 0 and (time.time() - wait_start) < 1.0:
+            time.sleep(0.01)
+            
+        while check_motion() == 1:
+            if float(node.current_weight) >= threshold:
+                stop_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                amovel(stop_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1)
+                return True
+            time.sleep(0.01) 
+        return False
+    
     tuning = TUBE_TUNING[tube_type]
     active_p_gain = tuning["P_GAIN"]
     active_d_gain = tuning["D_GAIN"]
     active_max_tilt_step = tuning["MAX_TILT_STEP"]
     active_stop_thresh = tuning["STOP_THRESHOLD"]
-    active_init_tilt_step = tuning.get("INIT_TILT_STEP", 1.5) # [추가] 동적 초기 틸팅값 로드
-    active_tilt_back_angle = tuning.get("TILT_BACK_ANGLE", -1.0) # [추가] 동적 후퇴 각도 로드
+    active_init_tilt_step = tuning.get("INIT_TILT_STEP", 1.5) 
+    active_tilt_back_angle = tuning.get("TILT_BACK_ANGLE", -1.0) 
 
     start_t = time.time()
-    log_t = [] # [추가] 경과 시간 로깅 리스트
-    log_w = [] # [추가] 현재 무게 로깅 리스트
-    log_d = [] # [추가] 제어 입력(delta) 로깅 리스트
+    log_t = [] 
+    log_w = [] 
+    log_d = [] 
 
-    # [추가] 속도 및 가속도 계산을 위한 이전 상태 변수
     prev_time = time.time()
     prev_tcp_vel = 0.0
     prev_pour_speed = 0.0
 
-    # [추가] 초기 무게 감지 플래그 추가
     weight_detected = False
-    is_dribble_mode = False # [추가] 미세 제어 1회 진입 확인용 플래그
+    is_dribble_mode = False 
 
     stop_target = target_weight - active_stop_thresh
     
-
     print(f"[SYSTEM] Task Start! Target: {target_weight}g | Tube: {tube_type} | Final Stop: {stop_target}g")
 
     if tube_type == "LARGE":
         pour_ready_pos = posx(561.045, 144.760, 175.965, 91.920, 97.358, 88.558)
-    else: # "SMALL1", "SMALL2"
+    else: 
         pour_ready_pos = posx(585.440, 144.760, 160.631, 91.920, 97.360, 88.550)
 
-    # 시작 자세로 이동
     try:
-        # [수정] 액체 출렁임 방지를 위해 이동 속도 하향 (vel=50, acc=50)
         movel(pour_ready_pos, vel=50, acc=50)
         wait(1.0)
 
-        set_robot_mode(ROBOT_MODE_MANUAL) # [추가]
-        set_tcp(FINGER_TCP_NAME) # [추가]
-        time.sleep(0.5) # [수정] 제어기 TCP 변경 적용 대기
-        set_robot_mode(ROBOT_MODE_AUTONOMOUS) # [추가]
-        time.sleep(0.5) # [수정] 모드 전환 완료 대기
+        set_robot_mode(ROBOT_MODE_MANUAL) 
+        set_tcp(FINGER_TCP_NAME) 
+        time.sleep(0.5) 
+        set_robot_mode(ROBOT_MODE_AUTONOMOUS) 
+        time.sleep(0.5) 
 
     except Exception as e:
         print(f"[ERROR] Move Failed: {e}")
@@ -360,7 +371,6 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
     prev_error = target_weight - float(node.current_weight)
 
     while rclpy.ok():
-        # STOP 들어오면: 자세 복귀 후 종료(노드 유지)
         if STOP_REQUESTED:
             try:
                 movel(pour_ready_pos, vel=150, acc=150)
@@ -376,11 +386,10 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
 
         current_weight = float(node.current_weight)
 
-        cur_t = time.time() - start_t # [추가] 현재 경과 시간 계산
-        log_t.append(cur_t) # [추가] 시간 로깅
-        log_w.append(current_weight) # [추가] 무게 로깅
+        cur_t = time.time() - start_t 
+        log_t.append(cur_t) 
+        log_w.append(current_weight) 
 
-        # 목표 근처 도달하면 복귀 자세로 이동 후 종료
         if current_weight >= stop_target:
             try:
                 movel(pour_ready_pos, vel=100, acc=100)
@@ -394,13 +403,11 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
 
             actual_cycle_time = time.time() - start_t
             
-            # [수정] active_init_tilt_step, active_tilt_back_angle 인자 추가 전달
             metrics_result = calc_metrics(log_t, log_w, target_weight, final_settled_weight, 
                                           active_p_gain, active_d_gain, active_max_tilt_step, active_stop_thresh, 
                                           active_init_tilt_step, active_tilt_back_angle,
                                           tube_type, actual_cycle_time)   
             
-            # [수정] 종료 후 결과 퍼블리시 (ControlResult)
             if metrics_result:
                 overshoot, rise_t, set_t, ss_err, error_rate, p_d_ratio = metrics_result
                 
@@ -415,20 +422,18 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
                 msg_result.settling_time = float(set_t)
                 msg_result.ss_error = float(ss_err)
                 msg_result.error_rate = float(error_rate)
-                msg_result.final_settled_weight = float(final_settled_weight)
                 node.pub_result.publish(msg_result)
 
             print(f" [Done] Final: {final_settled_weight:.1f}g (stop_target={stop_target:.1f}g)")
             return True
 
-        # [수정] 초기 틸팅 및 Tilt-back 로직에 동적 튜닝 파라미터 적용
         if not weight_detected:
-            if current_weight >= 1.0: 
+            # [수정] 하드코딩된 1.0g 임계값을 0.5g으로 하향
+            if current_weight >= 0.5: 
                 weight_detected = True
                 print("[SYSTEM] Liquid detected. Executing initial Tilt-back to cut flow.")
                 
                 try:
-                    # [수정] 하드코딩된 -1.0 대신 active_tilt_back_angle 적용
                     tilt_back_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, active_tilt_back_angle)
                     movel(tilt_back_pos, vel=20, acc=20, ref=1, mod=1)
                     wait(0.5) 
@@ -438,28 +443,31 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
                 
                 continue
             else:
-                # [수정] 하드코딩된 1.5 대신 active_init_tilt_step 적용
                 delta = active_init_tilt_step
                 error = target_weight - current_weight
+                
+                # [수정] 비동기 함수 호출 시 변경된 0.5g 임계값 적용
+                is_detected = async_tilt_and_monitor(delta, 0.5)
+                if is_detected:
+                    weight_detected = True
+                    print("[SYSTEM] Liquid detected during async tilt. Stopping immediately.")
+                    continue
         else:
             delta, error = calculate_tilt_angle_pd(current_weight, target_weight, active_p_gain, active_d_gain, active_max_tilt_step)
         
-        log_d.append(delta) # [추가] 제어 입력 로깅
+        log_d.append(delta) 
 
-        # [추가] 실시간 기구학 데이터 계산
         tcp_vel, tcp_acc, pour_speed, current_time = calc_kinematics(prev_tcp_vel, prev_time)
         prev_tcp_vel = tcp_vel
         prev_pour_speed = pour_speed
         prev_time = current_time
 
-        # [수정] 실시간 제어 지표 퍼블리시 (ControlLive)
         msg_live = ControlLive()
         msg_live.tcp_vel = float(tcp_vel)
         msg_live.tcp_acc = float(tcp_acc)
         msg_live.pour_speed = float(pour_speed)
         node.pub_live.publish(msg_live)
 
-        # [추가] 디버깅 모드일 경우 rqt_plot을 위한 데이터 퍼블리시
         if getattr(node, 'debug_mode', False):
             msg_delta = Float32()
             msg_delta.data = float(delta)
@@ -470,10 +478,11 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
             node.pub_debug_weight.publish(msg_weight)
 
         try:
-            rel_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, delta) # [추가] 툴 좌표계 기준 Z축 회전량(delta) 설정
-            movel(rel_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1) # [추가] ref=1(툴 좌표계), mod=1(상대 이동) 적용하여 직교 제어
+            if weight_detected: # [추가] weight_detected가 활성화된 이후(PD 제어 시)에만 기존 movel 실행
+                rel_pos = posx(0.0, 0.0, 0.0, 0.0, 0.0, delta) 
+                movel(rel_pos, vel=VELOCITY, acc=ACC, ref=1, mod=1) 
 
-            print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f}")
+                print(f"Cur: {current_weight:.1f} | Delta: {delta:.2f} | Err: {error:.1f}")
 
         except Exception as e:
             print(f"[ERROR] Tilt Move Failed: {e}")

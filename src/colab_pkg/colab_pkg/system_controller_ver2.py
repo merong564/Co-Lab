@@ -53,27 +53,6 @@ class SystemController(Node):
         msg.phase = self.current_phase
         self.pub_status.publish(msg)
 
-        # try:
-        #     vel_data = get_current_velx()
-        #     vx, vy, vz = vel_data[0], vel_data[1], vel_data[2]
-        #     current_vel = math.sqrt(vx**2 + vy**2 + vz**2)
-        # except Exception:
-        #     current_vel = 0.0
-
-        # current_time = self.get_clock().now()
-        # dt = (current_time - self.prev_time).nanoseconds / 1e9
-
-        # if dt > 0:
-        #     current_acc = (current_vel - self.prev_tcp_vel) / dt
-        # else:
-        #     current_acc = 0.0
-
-        # msg.tcp_vel = float(current_vel)
-        # msg.tcp_acc = float(current_acc)
-
-        # self.prev_tcp_vel = current_vel
-        # self.prev_time = current_time
-
     def stop_callback(self, msg: String):
         """ /dsr01/stop/impact 에서 'STOP' 오면 /dsr01/stop 으로 'STOP' 재발행 """
         data = (msg.data or "").strip().upper()
@@ -103,6 +82,13 @@ class SystemController(Node):
                 self.get_logger().info(f'{name} service not available, waiting again...')
         self.get_logger().info('All Service Servers Connected!')
 
+    def set_phase(self, new_phase):
+        self.current_phase = new_phase
+        msg = SystemStatus()
+        msg.phase = self.current_phase
+        self.pub_status.publish(msg)
+        self.get_logger().info(f"[Phase Changed] -> {new_phase}")
+
     async def handle_start_process(self, request, response):
         self.get_logger().info("=" * 40)
         self.get_logger().info("[Process Start]")
@@ -112,49 +98,49 @@ class SystemController(Node):
 
         # [추가] 프로세스 시작 시 초기화
         self.current_held_target = ""
-        self.current_phase = "Ready" # [추가] 시작 시 상태 초기화
+        self.set_phase("Ready") # [수정] 상태 초기화 시 함수 사용
 
         try:
             for target, weight in zip(request.targets, request.target_weights):
                 self.get_logger().info(f"[Task] Target: {target}, Target Weight: {weight}g")
 
                 if self.check_stop(): raise Exception("Process Aborted by User")
-                self.current_phase = "Taring" # [추가] 상태 변경
+                self.set_phase("Taring") # [추가] 상태 변경
                 if not await self.call_service(self.cli_scale, mode="TARE"):
                     raise Exception("Scale Tare Failed")
 
                 if self.check_stop(): raise Exception("Process Aborted by User")
-                self.current_phase = "Transfer" # [추가] 상태 변경
+                self.set_phase("Transfer") # [추가] 상태 변경
                 if not await self.call_service(self.cli_transfer, mode="PICKUP", targets=[target]):
                     raise Exception(f"Transfer Pickup Failed for {target}")
                 # current_target = target # [추가] 픽업 성공, 현재 물체 파지 중
 
                 if self.check_stop(): raise Exception("Process Aborted by User")
-                self.current_phase = "Pouring" # [추가] 상태 변경
+                self.set_phase("Pouring") # [추가] 상태 변경
                 if not await self.call_service(self.cli_pouring, mode="POUR", targets=[target], target_weights=[weight]):
                     raise Exception(f"Pouring Failed for {target}")
 
                 if self.check_stop(): raise Exception("Process Aborted by User")
-                self.current_phase = "Return" # [추가] 상태 변경
+                self.set_phase("Return") # [추가] 상태 변경
                 if not await self.call_service(self.cli_transfer, mode="RETURN", targets=[target]):
                     raise Exception(f"Transfer Return Failed for {target}")
                 # current_target = "" # [추가] 리턴 성공, 빈 손 상태
 
             if self.check_stop(): raise Exception("Process Aborted by User")
-            self.current_phase = "Mixing" # [추가] 상태 변경
+            self.set_phase("Mixing") # [추가] 상태 변경
             if not await self.call_service(self.cli_mixing, mode="MIX", mixing_duration=request.mixing_duration):
                 raise Exception("Mixing Failed")
 
             if self.check_stop(): raise Exception("Process Aborted by User")
             # current_target = "BEAKER" # [추가] 믹싱 완료 후 비커 파지 상태로 간주
-            self.current_phase = "Return" # [추가] 상태 변경
+            self.set_phase("Return") # [추가] 상태 변경
             if not await self.call_service(self.cli_transfer, mode="RETURN", targets=["BEAKER"]):
                 raise Exception("Final Return Failed for BEAKER")
             # current_target = "" # [추가] 비커 리턴 성공
 
             response.success = True
             response.message = "All tasks completed successfully."
-            self.current_phase = "Ready" # [추가] 모든 작업 완료 후 대기 상태
+            self.set_phase("Ready") # [추가] 모든 작업 완료 후 대기 상태
             self.get_logger().info("[Process Complete] All tasks finished.")
 
         except Exception as e:
@@ -164,7 +150,7 @@ class SystemController(Node):
 
             # [추가] 에러 발생 시 자동 복구 시퀀스 진행
             self.get_logger().info("=== [Auto-Recovery Sequence Initiated] ===")
-            self.current_phase = "Recovery" # [추가] 상태 변경
+            self.set_phase("Recovery") # [추가] 상태 변경
 
             # [수정] 1. 급정지로 인한 로봇의 물리적 흔들림(여진)이 완전히 멈출 때까지 대기
             self.get_logger().info("Waiting for physical vibrations to settle...")
@@ -191,7 +177,7 @@ class SystemController(Node):
             
             if rec_result.success:
                 self.get_logger().info("=== [Auto-Recovery Completed Successfully] ===")
-                self.current_phase = "Ready" # [추가] 복구 완료 후 대기 상태
+                self.set_phase("Ready") # [추가] 복구 완료 후 대기 상태
             else:
                 self.get_logger().error(f"=== [Auto-Recovery Failed]: {rec_result.message} ===")
 
