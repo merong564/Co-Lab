@@ -43,7 +43,7 @@ TUBE_TUNING = {
     },
     "SMALL1": {
         "P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 0.5, # [수정] 오버슛 방지를 위한 상향
-        "INIT_TILT_STEP": 0.9, "TILT_BACK_ANGLE": -1.5 # [추가] 초기 틸팅 및 후퇴 각도 튜닝값
+        "INIT_TILT_STEP": 0.8, "TILT_BACK_ANGLE": -1.5 # [추가] 초기 틸팅 및 후퇴 각도 튜닝값
     },
     "SMALL2": {
         "P_GAIN": 0.015, "D_GAIN": 0.15, "MAX_TILT_STEP": 0.2, "STOP_THRESHOLD": 0.5, # [수정] 오버슛 방지를 위한 상향
@@ -220,6 +220,7 @@ class TaskPouring(Node):
 
         response.success = bool(success)
         response.message = "Pouring Completed" if success else "Pouring Failed"
+        response.held_object = tube_type
         return response
 
     def weight_callback(self, msg: Float32):
@@ -372,7 +373,7 @@ def perform_task(node: TaskPouring, target_weight: float, tube_type: str = "LARG
 
             print(" [STOP] Returned to ready pose. Finishing task.")
             STOP_REQUESTED = False
-            return True
+            return False
 
         current_weight = float(node.current_weight)
 

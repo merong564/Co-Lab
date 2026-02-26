@@ -105,9 +105,14 @@ class TaskRecovery(Node):
         from DSR_ROBOT2 import (
             wait, get_current_posx, movel, movej, amovel, amovej, check_motion, 
             set_digital_output, posx, posj, DR_BASE,
-            release_force, release_compliance_ctrl
+            set_tcp, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS
         )
         global STOP_REQUESTED
+    
+        set_robot_mode(ROBOT_MODE_MANUAL)
+        set_tcp(ROBOT_TCP)
+        set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+        time.sleep(0.5)
 
         # --- 1) 안전 모션 커스텀 함수 정의 ---
         def _check_stop(tag=""):
