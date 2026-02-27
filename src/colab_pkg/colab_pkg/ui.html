@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Co_Lab UI - v11 (Emergency Tag Display)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.0.2"></script>
+    
+    <style>
+        body { background-color: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .header-title { color: #2c3e50; font-weight: 800; letter-spacing: -0.5px; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 20px; transition: 0.3s; }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 6px 15px rgba(0,0,0,0.1); }
+        .card-header { background: #fff; border-bottom: 2px solid #f0f0f0; font-weight: 700; padding: 15px 20px; border-radius: 12px 12px 0 0 !important; }
+        .weight-display { font-size: 3.5rem; font-weight: 800; color: #0d6efd; font-family: 'Roboto Mono', monospace; letter-spacing: -2px; }
+        .flow-display { font-size: 1.4rem; color: #fd7e14; font-weight: 700; }
+        .step-container { display: flex; justify-content: space-around; padding: 10px 0; background: #f8f9fa; border-radius: 10px; margin-bottom: 10px; }
+        .step-item { text-align: center; opacity: 0.4; transition: 0.3s; position: relative; }
+        .step-active { opacity: 1; transform: scale(1.1); font-weight: bold; color: #0d6efd; }
+        .step-icon { font-size: 1.8rem; margin-bottom: 5px; display: block; }
+        .step-time { font-size: 0.7rem; color: #666; display: block; margin-top: 2px; }
+        #cup-icon { font-size: 4rem; color: #495057; transition: transform 0.2s ease-out; display: inline-block; }
+        .btn-estop { width: 100%; height: 60px; font-size: 1.6rem; font-weight: 800; background: linear-gradient(45deg, #dc3545, #c82333); color: white; border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(220, 53, 69, 0.4); animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(220, 53, 69, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); } }
+        .status-light { width: 15px; height: 15px; border-radius: 50%; display: inline-block; margin-right: 8px; border: 2px solid rgba(0,0,0,0.1); }
+        .light-red { background-color: #ff4d4d; box-shadow: 0 0 8px #ff4d4d; }
+        .light-green { background-color: #28a745; box-shadow: 0 0 8px #28a745; }
+        .joint-val { font-size: 0.85rem; background: #e9ecef; padding: 4px 8px; border-radius: 6px; display: inline-block; width: 100%; text-align: center; font-family: monospace; }
+        .phase-badge { font-size: 1.2rem; padding: 10px; width: 100%; display: block; margin-bottom: 10px; }
+        .tolerance-badge { background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; vertical-align: middle; margin-left: 4px; font-weight: 800; }
+        .ingredient-input { border: 1px solid #ced4da; border-radius: 8px; padding: 10px; margin-bottom: 10px; background-color: #fff; }
+        .ingredient-input .form-control { border: none; background-color: #f8f9fa; text-align: center; font-weight: bold; }
+    </style>
+</head>
+<body onload="initSystem()">
+
+<div class="container-fluid px-4 py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="header-title"><i class="fas fa-flask text-primary"></i> Co_Lab User Interface</h2>
+            <p class="text-muted mb-0">SystemStatus Monitoring & Control</p>
+        </div>
+        
+        <div class="card px-3 py-2 d-flex flex-row align-items-center mb-0">
+            <div id="status-light" class="status-light light-red"></div>
+            <span id="connection-text" class="fw-bold text-secondary">System Offline</span>
+            <span class="mx-2 text-muted">|</span>
+            <small class="text-muted me-2">Robot Mode:</small>
+            <span id="robot-mode-badge" class="badge bg-secondary">Unknown</span>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-3">
+            <div class="card h-100">
+                <div class="card-header"><i class="fas fa-sliders-h"></i> 작업 설정 (Command)</div>
+                <div class="card-body">
+
+                    <label class="form-label fw-bold">액체 재료 설정 (Lab Recipe)</label>
+                    <div class="ingredient-input">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span><i class="fas fa-flask" style="color: #dc3545;"></i> 에탄올</span>
+                            <div class="input-group input-group-sm" style="width: 100px;">
+                                <input type="number" id="mat_ethanol" class="form-control" value="10" step="1" oninput="calculateTotalWeight()">
+                                <span class="input-group-text">g</span>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span><i class="fas fa-flask" style="color: #0d6efd;"></i> 아세톤</span>
+                            <div class="input-group input-group-sm" style="width: 100px;">
+                                <input type="number" id="mat_acetone" class="form-control" value="10" step="1" oninput="calculateTotalWeight()">
+                                <span class="input-group-text">g</span>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span><i class="fas fa-tint text-info"></i> 물</span>
+                            <div class="input-group input-group-sm" style="width: 100px;">
+                                <input type="number" id="mat_water" class="form-control" value="100" step="1" oninput="calculateTotalWeight()">
+                                <span class="input-group-text">g</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3 mt-3">
+                        <div class="col-6">
+                            <label class="form-label fw-bold">목표 무게 (g)</label>
+                            <input type="number" id="target_weight" class="form-control text-center fw-bold bg-white" value="120" readonly>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-bold">섞는 시간 (s)</label>
+                            <input type="number" id="mixing_duration" class="form-control text-center fw-bold text-success" value="10" step="1">
+                        </div>
+                    </div>
+                    
+                    <hr class="my-4">
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-primary btn-lg py-3 fw-bold shadow-sm" onclick="startExperiment()"><i class="fas fa-play"></i> 작업 시작 (Start)</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card text-center mb-3">
+                <div class="card-header bg-white"><i class="fas fa-eye text-primary"></i> 실시간 모니터링 (Real-time)</div>
+                <div class="card-body pb-2">
+                    <div class="row align-items-center">
+                        <div class="col-5 border-end">
+                            <small class="text-muted text-uppercase fw-bold">Current Weight</small>
+                            <div class="weight-display"><span id="current_weight">0.0</span><span class="fs-4 text-muted">g</span></div>
+                        </div>
+                        <div class="col-7">
+                            <div class="row">
+                                <div class="col-6">
+                                    <small class="text-muted">Pour Speed</small>
+                                    <div class="flow-display"><span id="pour_speed">0.0</span> deg/s</div>
+                                </div>
+                                <div class="col-6">
+                                    <small class="text-muted">Flow Rate</small>
+                                    <div class="fw-bold fs-5 text-dark"><span id="current_flow">0.0</span> g/s</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-chart-area text-success"></i> 무게 및 유량 분석</span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="exportToCSV()"><i class="fas fa-download"></i> CSV</button>
+                </div>
+                <div class="card-body">
+                    <div style="height: 250px;"><canvas id="chartCombined"></canvas></div>
+                    
+                    <div class="row mt-3 pt-3 border-top text-center bg-light rounded mx-1 pb-2">
+                        <div class="col-3 border-end">
+                            <small class="text-muted d-block" style="font-size:0.75rem">성공 횟수 / 총 작업 횟수</small>
+                            <span class="fw-bold"><span id="success_count">0</span> / <span id="total_count">0</span></span>
+                        </div>
+                        <div class="col-3 border-end">
+                            <small class="text-muted d-block" style="font-size:0.75rem">레시피 성공률 <span class="tolerance-badge">오차 5% 미만</span></small>
+                            <span class="fw-bold text-success"><span id="success_rate">0</span>%</span>
+                        </div>
+                        <div class="col-3 border-end">
+                            <small class="text-muted d-block" style="font-size:0.75rem">누적 평균 오차율</small>
+                            <span class="fw-bold text-danger"><span id="avg_error_rate">0.0</span>%</span>
+                        </div>
+                        <div class="col-3">
+                            <small class="text-muted d-block" style="font-size:0.75rem">평균 사이클 타임</small>
+                            <span class="fw-bold text-primary"><span id="avg_cycle_time">0.0</span>s</span>
+                        </div>
+                    </div>
+
+                    <div class="table-responsive mt-3 border rounded" style="max-height: 160px; overflow-y: auto;">
+                        <table class="table table-sm table-striped table-hover text-center mb-0" style="font-size: 0.8rem;">
+                            <thead class="table-light" style="position: sticky; top: 0; z-index: 1;">
+                                <tr>
+                                    <th>회차</th>
+                                    <th>목표(재료)</th>
+                                    <th>결과(오차g)</th>
+                                    <th>오차율</th>
+                                    <th>사이클 타임</th>
+                                    <th>최종 판정</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-tbody">
+                                <tr><td colspan="6" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-3">
+            <button class="btn-estop mb-3" onclick="emergencyStop()">STOP (긴급중단)</button>
+            
+            <div class="card mb-3">
+                <div class="card-header bg-light"><i class="fas fa-sync-alt"></i> Cycle Phase</div>
+                <div class="card-body text-center p-3 pb-2">
+                    <span id="phase-badge" class="badge bg-secondary phase-badge mb-2">Ready</span>
+                    
+                    <div class="progress mb-2" style="height: 22px; border-radius: 5px;">
+                        <div id="progress-bar" class="progress-bar bg-primary fw-bold" role="progressbar" style="width: 0%; min-width: 40px; transition: width 0.5s ease-in-out; font-size: 0.9rem;">0%</div>
+                    </div>
+                </div>
+                <div class="step-container mb-0">
+                    <div class="step-item step-active" id="step-Ready"><i class="fas fa-pause-circle step-icon"></i> <span class="step-time">대기</span></div>
+                    <div class="step-item" id="step-Transfer"><i class="fas fa-arrow-right step-icon"></i> <span class="step-time">이동</span></div>
+                    <div class="step-item" id="step-Pouring"><i class="fas fa-tint step-icon"></i> <span class="step-time">붓기</span></div>
+                    <div class="step-item" id="step-Mixing"><i class="fas fa-sync step-icon"></i> <span class="step-time">혼합</span></div>
+                    <div class="step-item" id="step-Return"><i class="fas fa-undo step-icon"></i> <span class="step-time">복귀</span></div>
+                </div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-header"><i class="fas fa-robot"></i> End-Effector</div>
+                <div class="card-body text-center">
+                    <div class="row g-2">
+                        <div class="col-6 border-end">
+                            <small class="text-muted d-block">TCP Vel</small>
+                            <span class="fw-bold text-dark"><span id="val_vel">0</span> mm/s</span>
+                        </div>
+                        <div class="col-6">
+                            <small class="text-muted d-block">TCP Acc</small>
+                            <span class="fw-bold text-dark"><span id="val_acc">0</span> mm/s²</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card mb-3">
+                <div class="card-header"><i class="fas fa-cogs"></i> Control Parameters</div>
+                <div class="card-body text-center p-2">
+                    <div class="row g-2 align-items-center">
+                        <div class="col-6 border-end">
+                            <small class="text-muted d-block" style="font-size: 0.7rem;">Max Tilt Step</small>
+                            <span class="fw-bold text-primary"><span id="val_max_step">0.0</span>&deg;</span>
+                        </div>
+                        <div class="col-6">
+                            <small class="text-muted d-block" style="font-size: 0.7rem;">Stop Threshold</small>
+                            <span class="fw-bold text-danger"><span id="val_stop_th">0.0</span>g</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card flex-grow-1">
+                <div class="card-header bg-dark text-white py-2"><small><i class="fas fa-terminal"></i> System Log</small></div>
+                <div class="card-body bg-light p-2">
+                    <div id="log-box" style="height: 100px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.7rem; color: #333;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+<script>
+    function calculateTotalWeight() {
+        const eth = parseFloat(document.getElementById('mat_ethanol').value) || 0;
+        const ace = parseFloat(document.getElementById('mat_acetone').value) || 0;
+        const water = parseFloat(document.getElementById('mat_water').value) || 0;
+        
+        const total = eth + ace + water;
+        document.getElementById('target_weight').value = total;
+    }
+
+    const firebaseConfig = { apiKey: "AIzaSyBOVQ2tEPWe_GfIBavzqcw1ppfe2EqiRdE", authDomain: "colab1-78afc.firebaseapp.com", databaseURL: "https://colab1-78afc-default-rtdb.asia-southeast1.firebasedatabase.app", projectId: "colab1-78afc", storageBucket: "colab1-78afc.firebasestorage.app", messagingSenderId: "312617327218", appId: "1:312617327218:web:2564e4ed07449d381dc0eb" };
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
+    let isRunning = false;
+    let startTime = 0;
+    let lastWeight = 0, lastTime = 0;
+    let experimentData = [];
+    
+    let lastUpdateTimestamp = 0;
+    let offlineCheckInterval = null;
+    let currentPhase = "Ready";
+    
+    // 💡 [핵심 추가 변수] 믹싱 완료 여부를 저장하는 플래그
+    let hasMixed = false; 
+
+    const ctx = document.getElementById('chartCombined').getContext('2d');
+    const combinedChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                { label: 'Weight (g)', data: [], borderColor: '#0d6efd', backgroundColor: 'rgba(13, 110, 253, 0.05)', borderWidth: 2, yAxisID: 'y', fill: true, tension: 0.3, pointRadius: 0 },
+                { label: 'Flow (g/s)', data: [], borderColor: '#ffc107', borderWidth: 2, borderDash: [5, 5], yAxisID: 'y1', tension: 0.1, pointRadius: 0 }
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            scales: {
+                x: { display: false },
+                y: { type: 'linear', display: true, position: 'left', beginAtZero: true, title: {display: true, text: 'Weight (g)'} },
+                y1: { type: 'linear', display: true, position: 'right', beginAtZero: true, grid: {drawOnChartArea: false}, title: {display: true, text: 'Flow Rate (g/s)'} }
+            },
+            plugins: { annotation: { annotations: { safeZone: { type: 'box', yMin: 0, yMax: 5, yScaleID: 'y1', backgroundColor: 'rgba(40, 167, 69, 0.1)', borderWidth: 0 } } } }
+        }
+    });
+
+    function initSystem() {
+        resetData();
+        addLog("User Interface Initialized.");
+        resetRobotInfo(); 
+        offlineCheckInterval = setInterval(checkOfflineStatus, 1000);
+        
+        const progressBar = document.getElementById('progress-bar');
+        if (progressBar) {
+            progressBar.style.width = "0%";
+            progressBar.innerText = "0%";
+        }
+    }
+
+    function checkOfflineStatus() {
+        if (Date.now() - lastUpdateTimestamp > 3000) updateConnectionStatus('offline');
+    }
+
+    function resetRobotInfo() {
+        if(document.getElementById('val_vel')) document.getElementById('val_vel').innerText = "0";
+        if(document.getElementById('val_acc')) document.getElementById('val_acc').innerText = "0";
+        if(document.getElementById('pour_speed')) document.getElementById('pour_speed').innerText = "0.0";
+    }
+
+    function updateConnectionStatus(status, mode = "Unknown") {
+        const light = document.getElementById('status-light');
+        const text = document.getElementById('connection-text');
+        const badge = document.getElementById('robot-mode-badge');
+
+        light.className = "status-light"; 
+        if(status === 'online') {
+            light.classList.add('light-green');
+            text.innerText = "System Online";
+            text.className = "fw-bold text-success";
+            badge.innerText = mode;
+            badge.className = (mode === "Autonomous") ? "badge bg-success" : "badge bg-secondary";
+        } else {
+            light.classList.add('light-red');
+            text.innerText = "System Offline";
+            text.className = "fw-bold text-secondary";
+            badge.innerText = "Unknown";
+            badge.className = "badge bg-secondary";
+            resetRobotInfo();
+        }
+    }
+
+    let pourCount = 0; 
+
+    database.ref('sensor_data').on('value', (snapshot) => {
+        const d = snapshot.val();
+        if(!d) return;
+        if (Date.now() - (d.timestamp || 0) > 3000) return;
+
+        lastUpdateTimestamp = Date.now();
+        updateConnectionStatus('online', 'Autonomous');
+
+        let displayWeight = parseFloat(d.weight || 0);
+        let flowRate = 0.0;
+        const currentTime = Date.now();
+
+        if (lastTime > 0) {
+            const dt = (currentTime - lastTime) / 1000;
+            if (dt > 0) flowRate = Math.max(0, (displayWeight - lastWeight) / dt);
+        }
+
+        document.getElementById('current_weight').innerText = displayWeight.toFixed(1);
+        document.getElementById('current_flow').innerText = flowRate.toFixed(1);
+
+        if (isRunning) {
+            let elapsedTime = ((currentTime - startTime) / 1000).toFixed(1);
+            experimentData.push({
+                time: elapsedTime,
+                weight: displayWeight.toFixed(2),
+                flow: flowRate
+            });
+        }
+
+        if (combinedChart.data.labels.length > 50) {
+            combinedChart.data.labels.shift();
+            combinedChart.data.datasets.forEach((dataset) => dataset.data.shift());
+        }
+        combinedChart.data.labels.push(new Date().toLocaleTimeString());
+        
+        combinedChart.data.datasets[0].data.push(displayWeight);
+        combinedChart.data.datasets[1].data.push(flowRate);
+        combinedChart.update('none');
+
+        lastWeight = displayWeight;
+        lastTime = currentTime;
+    });
+
+    database.ref('system_stats').on('value', (snapshot) => {
+        const stats = snapshot.val();
+        if(!stats) return;
+
+        if(stats.tcp_vel !== undefined) document.getElementById('val_vel').innerText = stats.tcp_vel;
+        if(stats.tcp_acc !== undefined) document.getElementById('val_acc').innerText = stats.tcp_acc;
+        if(stats.pour_speed !== undefined) document.getElementById('pour_speed').innerText = stats.pour_speed;
+        
+        if(stats.max_tilt_step !== undefined) {
+            document.getElementById('val_max_step').innerText = stats.max_tilt_step.toFixed(1);
+        }
+        if(stats.stop_threshold !== undefined) {
+            document.getElementById('val_stop_th').innerText = stats.stop_threshold.toFixed(1);
+        }
+
+        if(stats.phase) updatePhaseDisplay(stats.phase);
+    });
+
+    database.ref('robot_status').on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+        if (Date.now() - lastUpdateTimestamp > 3000) return;
+
+        if(data.current_angle !== undefined) { 
+            const angleElement = document.getElementById('robot_angle');
+            const cupElement = document.getElementById('cup-icon');
+            
+            if (angleElement) {
+                angleElement.innerText = data.current_angle; 
+            }
+            if (cupElement) {
+                cupElement.style.transform = "rotate(" + data.current_angle + "deg)"; 
+            }
+        }
+    });
+
+    database.ref('experiment_history').on('value', (snapshot) => {
+        const tbody = document.getElementById('history-tbody');
+        if (!snapshot.exists()) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-muted py-2">실험 데이터가 없습니다.</td></tr>';
+            document.getElementById('total_count').innerText = "0";
+            document.getElementById('success_count').innerText = "0";
+            document.getElementById('success_rate').innerText = "0";
+            document.getElementById('avg_error_rate').innerText = "0.0";
+            document.getElementById('avg_cycle_time').innerText = "0.0";
+            return;
+        }
+
+        tbody.innerHTML = ''; 
+        let records = [];
+        let calcTotalCount = 0;
+        let calcSuccessCount = 0;
+        let sumErrorRate = 0.0;
+        let sumCycleTime = 0.0;
+
+        snapshot.forEach((child) => {
+            const data = child.val();
+            records.push(data);
+            
+            calcTotalCount++;
+            if (data.success === true) { 
+                calcSuccessCount++; 
+            }
+            sumErrorRate += parseFloat(data.error_rate) || 0.0;
+            sumCycleTime += parseFloat(data.cycle_time) || 0.0;
+        });
+        
+        document.getElementById('total_count').innerText = calcTotalCount;
+        document.getElementById('success_count').innerText = calcSuccessCount;
+        
+        let dbSuccessRate = calcTotalCount > 0 ? ((calcSuccessCount / calcTotalCount) * 100).toFixed(0) : 0;
+        document.getElementById('success_rate').innerText = dbSuccessRate;
+        
+        let dbAvgError = calcTotalCount > 0 ? (sumErrorRate / calcTotalCount).toFixed(2) : "0.0";
+        document.getElementById('avg_error_rate').innerText = dbAvgError;
+
+        let dbAvgCycle = calcTotalCount > 0 ? (sumCycleTime / calcTotalCount).toFixed(1) : "0.0";
+        document.getElementById('avg_cycle_time').innerText = dbAvgCycle;
+        
+        for(let i = records.length - 1; i >= 0; i--) {
+            const data = records[i];
+            const tr = document.createElement('tr');
+            
+            let successBadge = '';
+            if (data.is_emergency === true) {
+                successBadge = '<span class="badge" style="background-color: #8b0000; color: white;">긴급중단</span>';
+            } else {
+                successBadge = data.success 
+                    ? '<span class="badge bg-success">성공</span>' 
+                    : '<span class="badge bg-danger">실패</span>';
+            }
+                
+            const materialStr = data.material !== undefined ? data.material : '-';
+            const ssError = data.ss_error_g !== undefined ? data.ss_error_g : '-';
+            const cycle = data.cycle_time !== undefined ? data.cycle_time : '-';
+            const displayErrorRate = data.error_rate !== undefined ? data.error_rate : "0.0";
+            
+            const errorClass = data.success === true ? 'text-success' : 'text-danger';
+
+            tr.innerHTML = 
+                "<td class='fw-bold'>" + (i + 1) + "</td>" +
+                "<td>" + data.target_weight + "g<br><small class='text-muted'>" + materialStr + "</small></td>" +
+                "<td class='text-primary fw-bold'>" + data.final_weight + "g<br><small class='text-danger'>(±" + ssError + "g)</small></td>" +
+                "<td class='" + errorClass + " fw-bold'>" + displayErrorRate + "%</td>" +
+                "<td>" + cycle + "s</td>" +
+                "<td>" + successBadge + "</td>";
+            
+            tbody.appendChild(tr);
+        }
+    });
+
+    // 💡 [핵심 수정 구간] updatePhaseDisplay 함수
+    function updatePhaseDisplay(rawPhase) {
+        if (!rawPhase) return;
+        
+        const newPhase = rawPhase.trim().charAt(0).toUpperCase() + rawPhase.trim().slice(1).toLowerCase();
+
+        if(currentPhase !== newPhase) {
+            // 상태 초기화 로직
+            if (newPhase === "Ready" || newPhase === "Stop" || newPhase === "Error" || newPhase === "Emergency") {
+                pourCount = 0;
+                hasMixed = false; // 💡 시작할 때 믹싱 플래그도 함께 리셋
+            }
+            if (newPhase === "Pouring") pourCount++;
+
+            currentPhase = newPhase;
+            const badge = document.getElementById('phase-badge');
+            
+            if (newPhase === "Emergency" || newPhase === "Stop" || newPhase === "Error") {
+                badge.innerText = "🚨 EMERGENCY";
+            } else {
+                badge.innerText = newPhase;
+            }
+
+            document.querySelectorAll('.step-item').forEach(el => el.classList.remove('step-active'));
+            
+            const stepId = "step-" + newPhase;
+            const stepEl = document.getElementById(stepId);
+            
+            if(stepEl) {
+                stepEl.classList.add('step-active');
+                badge.className = "badge bg-primary phase-badge";
+            } else if (newPhase === "Stop" || newPhase === "Error" || newPhase === "Emergency") {
+                badge.className = "badge bg-danger phase-badge";
+            } else {
+                document.getElementById('step-Ready').classList.add('step-active');
+                badge.className = "badge bg-secondary phase-badge";
+            }
+
+            // 💡 [핵심 알고리즘 변경] 문맥 인지형(Context-Aware) 프로그레스 바 계산
+            let progressPct = 0;
+            const totalPours = 3; // 총 부어야 할 재료 개수 (물, 에탄올, 아세톤)
+
+            if (newPhase === "Ready" || newPhase === "Stop" || newPhase === "Error" || newPhase === "Emergency") {
+                progressPct = 0; 
+                hasMixed = false;
+            } 
+            else if (newPhase === "Transfer") {
+                // 전체 공정 중 붓기가 차지하는 비중(약 60%)을 기준으로 현재 횟수만큼 진행
+                progressPct = (pourCount / totalPours) * 60 + 5; 
+            } 
+            else if (newPhase === "Pouring") {
+                progressPct = (pourCount / totalPours) * 60 + 15; 
+            } 
+            else if (newPhase === "Mixing") {
+                hasMixed = true; // 💡 혼합 단계를 거쳤음을 영구 기록
+                progressPct = 85; 
+            } 
+            else if (newPhase === "Return") {
+                // 💡 분기점: 혼합을 마친 후의 '최종 복귀'인가? 아니면 시약 '중간 반납'인가?
+                if (hasMixed === true) {
+                    progressPct = 100; 
+                } else {
+                    // 시약 중간 반납 시에는 100%가 되지 않도록 현재 진척도를 유지
+                    progressPct = (pourCount / totalPours) * 60 + 20; 
+                }
+            }
+            
+            // UI 렌더링
+            if (progressPct > 100) progressPct = 100;
+
+            const progressBar = document.getElementById('progress-bar');
+            if(progressBar) {
+                progressBar.style.width = progressPct + "%";
+                
+                if(newPhase === "Stop" || newPhase === "Error" || newPhase === "Emergency") {
+                    progressBar.classList.remove('bg-primary');
+                    progressBar.classList.add('bg-danger');
+                    progressBar.innerText = "HALTED"; 
+                } else {
+                    progressBar.classList.remove('bg-danger');
+                    progressBar.classList.add('bg-primary');
+                    progressBar.innerText = Math.round(progressPct) + "%"; // 소수점 방지를 위해 Math.round 추가
+                }
+            }
+
+            if(newPhase === "Ready" || newPhase === "Stop" || newPhase === "Emergency") {
+                isRunning = false;
+            }
+        }
+    }
+
+    function startExperiment() {
+        const eth = document.getElementById('mat_ethanol').value;
+        const ace = document.getElementById('mat_acetone').value;
+        const water = document.getElementById('mat_water').value;
+        const target = document.getElementById('target_weight').value;
+        const mixing = document.getElementById('mixing_duration').value;
+        
+        const customMaterial = "Lab Recipe (에탄올" + eth + "/아세톤" + ace + "/물" + water + ")";
+        
+        if(confirm("[" + customMaterial + "]\n작업 시작?\n목표: " + target + "g / 혼합: " + mixing + "초")) {
+            resetData();
+            pourCount = 0; 
+            hasMixed = false; // 💡 시작 시 초기화
+
+            isRunning = true;
+            startTime = Date.now();
+            experimentData = []; 
+
+            database.ref('commands').set({ 
+                type: "start_pouring", 
+                target_weight: target, 
+                mixing_duration: mixing,
+                material: customMaterial, 
+                timestamp: Date.now() 
+            });
+            addLog("🚀 Start: " + target + "g, Mix " + mixing + "s");
+        }
+    }
+    
+    function emergencyStop() { 
+        database.ref('commands').set({ type: "emergency_stop", timestamp: Date.now() }); 
+        database.ref('system_stats/phase').set("Emergency"); 
+        addLog("🚨 STOP Signal Sent!"); 
+    }
+    
+    function resetData() { 
+        combinedChart.data.labels = []; 
+        combinedChart.data.datasets.forEach(d => d.data = []); 
+        combinedChart.update(); 
+        document.getElementById('current_weight').innerText = "0.0"; 
+        document.getElementById('current_flow').innerText = "0.0"; 
+    }
+    
+    function addLog(msg) {
+        const box = document.getElementById('log-box');
+        if(box) {
+            const time = new Date().toLocaleTimeString();
+            box.innerHTML = "[" + time + "] " + msg + "<br>" + box.innerHTML;
+        }
+    }
+    
+    function exportToCSV() {
+        if (experimentData.length === 0) { alert("저장할 데이터가 없습니다."); return; }
+        let csvContent = "data:text/csv;charset=utf-8,Time(s),Weight(g),Flow(g/s)\r\n";
+        experimentData.forEach(row => { csvContent += row.time + "," + row.weight + "," + row.flow.toFixed(2) + "\r\n"; });
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "experiment_260220_v01.csv");
+        document.body.appendChild(link);
+        link.click();
+    }
+</script>
+</body>
+</html>
