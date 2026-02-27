@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Lab UI - v11 (Emergency Tag Display)</title>
+    <title>Co_Lab UI - v11 (Emergency Tag Display)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -40,7 +40,7 @@
 <div class="container-fluid px-4 py-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h2 class="header-title"><i class="fas fa-flask text-primary"></i> Smart Lab User Interface</h2>
+            <h2 class="header-title"><i class="fas fa-flask text-primary"></i> Co_Lab User Interface</h2>
             <p class="text-muted mb-0">SystemStatus Monitoring & Control</p>
         </div>
         
@@ -94,9 +94,6 @@
                             <input type="number" id="mixing_duration" class="form-control text-center fw-bold text-success" value="10" step="1">
                         </div>
                     </div>
-
-                    <label class="form-label fw-bold">초기 속도 (Speed)</label>
-                    <input type="range" class="form-range" id="speed_slider" min="1" max="100" value="50">
                     
                     <hr class="my-4">
                     <div class="d-grid gap-2">
@@ -265,6 +262,9 @@
     let lastUpdateTimestamp = 0;
     let offlineCheckInterval = null;
     let currentPhase = "Ready";
+    
+    // 💡 [핵심 추가 변수] 믹싱 완료 여부를 저장하는 플래그
+    let hasMixed = false; 
 
     const ctx = document.getElementById('chartCombined').getContext('2d');
     const combinedChart = new Chart(ctx, {
@@ -460,7 +460,6 @@
             const data = records[i];
             const tr = document.createElement('tr');
             
-            // 💡 [핵심 추가] DB에서 is_emergency 여부를 판별하여 다크 레드 색상의 "긴급중단" 뱃지를 띄웁니다.
             let successBadge = '';
             if (data.is_emergency === true) {
                 successBadge = '<span class="badge" style="background-color: #8b0000; color: white;">긴급중단</span>';
@@ -489,13 +488,18 @@
         }
     });
 
+    // 💡 [핵심 수정 구간] updatePhaseDisplay 함수
     function updatePhaseDisplay(rawPhase) {
         if (!rawPhase) return;
         
         const newPhase = rawPhase.trim().charAt(0).toUpperCase() + rawPhase.trim().slice(1).toLowerCase();
 
         if(currentPhase !== newPhase) {
-            if (newPhase === "Ready" || newPhase === "Stop" || newPhase === "Error" || newPhase === "Emergency") pourCount = 0;
+            // 상태 초기화 로직
+            if (newPhase === "Ready" || newPhase === "Stop" || newPhase === "Error" || newPhase === "Emergency") {
+                pourCount = 0;
+                hasMixed = false; // 💡 시작할 때 믹싱 플래그도 함께 리셋
+            }
             if (newPhase === "Pouring") pourCount++;
 
             currentPhase = newPhase;
@@ -522,23 +526,36 @@
                 badge.className = "badge bg-secondary phase-badge";
             }
 
+            // 💡 [핵심 알고리즘 변경] 문맥 인지형(Context-Aware) 프로그레스 바 계산
             let progressPct = 0;
+            const totalPours = 3; // 총 부어야 할 재료 개수 (물, 에탄올, 아세톤)
+
             if (newPhase === "Ready" || newPhase === "Stop" || newPhase === "Error" || newPhase === "Emergency") {
                 progressPct = 0; 
+                hasMixed = false;
             } 
             else if (newPhase === "Transfer") {
-                progressPct = (pourCount * 20) + 10; 
+                // 전체 공정 중 붓기가 차지하는 비중(약 60%)을 기준으로 현재 횟수만큼 진행
+                progressPct = (pourCount / totalPours) * 60 + 5; 
             } 
             else if (newPhase === "Pouring") {
-                progressPct = pourCount * 20; 
+                progressPct = (pourCount / totalPours) * 60 + 15; 
             } 
             else if (newPhase === "Mixing") {
-                progressPct = 80; 
+                hasMixed = true; // 💡 혼합 단계를 거쳤음을 영구 기록
+                progressPct = 85; 
             } 
             else if (newPhase === "Return") {
-                progressPct = 100; 
+                // 💡 분기점: 혼합을 마친 후의 '최종 복귀'인가? 아니면 시약 '중간 반납'인가?
+                if (hasMixed === true) {
+                    progressPct = 100; 
+                } else {
+                    // 시약 중간 반납 시에는 100%가 되지 않도록 현재 진척도를 유지
+                    progressPct = (pourCount / totalPours) * 60 + 20; 
+                }
             }
             
+            // UI 렌더링
             if (progressPct > 100) progressPct = 100;
 
             const progressBar = document.getElementById('progress-bar');
@@ -552,7 +569,7 @@
                 } else {
                     progressBar.classList.remove('bg-danger');
                     progressBar.classList.add('bg-primary');
-                    progressBar.innerText = progressPct + "%"; 
+                    progressBar.innerText = Math.round(progressPct) + "%"; // 소수점 방지를 위해 Math.round 추가
                 }
             }
 
@@ -574,6 +591,7 @@
         if(confirm("[" + customMaterial + "]\n작업 시작?\n목표: " + target + "g / 혼합: " + mixing + "초")) {
             resetData();
             pourCount = 0; 
+            hasMixed = false; // 💡 시작 시 초기화
 
             isRunning = true;
             startTime = Date.now();

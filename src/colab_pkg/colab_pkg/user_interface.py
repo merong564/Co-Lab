@@ -4,7 +4,7 @@
 """
 [Project] CO-LAB
 [File] user_interface.py
-[Version] 260226_v26 (Emergency Tag in History)
+[Version] 260226_v28 (Real-time Cycle Time & PC1 Heartbeat Added)
 """
 
 import rclpy
@@ -78,15 +78,17 @@ class UserInterface(Node):
         
         self.base_accumulated_weight = 0.0 
         self.final_accumulated_weight = 0.0   
-        
-        # 💡 [추가] 긴급 중단 여부를 추적하는 변수
+        self.last_display_weight = 0.0
         self.is_emergency_stopped = False
+
+        # 💡 [추가 기능 1] PC1(Controller Node) 생존 확인용 하트비트 변수
+        self.last_pc1_heartbeat = time.time()
 
     def stop_status_callback(self, msg):
         text = msg.data.strip().upper()
         if text in ["STOP", "RECOVERY", "EMERGENCY"]:
             self.recipe_failed_flag = True
-            self.is_emergency_stopped = True  # 💡 [추가] 토픽 수신 시 긴급중단 플래그 ON
+            self.is_emergency_stopped = True
             self.latest_system_status['phase'] = 'Emergency' 
             try:
                 db.reference('system_stats/phase').set('Emergency')
@@ -120,10 +122,11 @@ class UserInterface(Node):
                         self.cycle_start_time = time.time()
                         self.current_cycle_time = 0.0
                         self.recipe_failed_flag = False
-                        self.is_emergency_stopped = False # 💡 [추가] 작업 시작 시 긴급중단 플래그 리셋
+                        self.is_emergency_stopped = False
                         self.latest_pour_speed = 0.0
                         
                         self.base_accumulated_weight = 0.0
+                        self.last_display_weight = 0.0
                         self.final_accumulated_weight = 0.0
                         self.is_cycle_running = True 
 
@@ -134,7 +137,7 @@ class UserInterface(Node):
                     elif cmd_type == 'emergency_stop':
                         self.stop_pub.publish(String(data="STOP"))
                         self.recipe_failed_flag = True
-                        self.is_emergency_stopped = True # 💡 [추가] UI 버튼 클릭 시 긴급중단 플래그 ON
+                        self.is_emergency_stopped = True
                         self.latest_system_status['phase'] = 'Emergency'
                         db.reference('system_stats/phase').set('Emergency')
                         
@@ -180,31 +183,57 @@ class UserInterface(Node):
         try:
             current_phase = self.latest_system_status.get('phase', 'Ready').lower()
             
+            # 💡 [추가 기능 2] 실시간 사이클 타임 계산
+            if self.is_cycle_running:
+                realtime_duration = round(time.time() - self.cycle_start_time, 1)
+            else:
+                realtime_duration = self.current_cycle_time
+
+            # [기존 기능 유지] 비커를 들어올리는 Mixing과 Return 단계에서는 무조건 0.0g 출력
             if current_phase in ['mixing', 'return']:
                 display_w = 0.0 
             else:
-                display_w = round(self.base_accumulated_weight + self.latest_weight, 2)
+                calculated_w = round(self.base_accumulated_weight + self.latest_weight, 2)
+                display_w = max(calculated_w, self.last_display_weight)
+                self.last_display_weight = display_w
+
+            # 💡 [추가 기능 1] PC1이 2.0초 이상 응답이 없으면 Offline으로 판단
+            pc1_is_online = (time.time() - self.last_pc1_heartbeat) < 2.0
 
             updates = {
                 'sensor_data/weight': display_w,
-                'sensor_data/timestamp': int(time.time() * 1000)
+                'sensor_data/timestamp': int(time.time() * 1000),
+                'connection/pc1_status': "online" if pc1_is_online else "offline" # 💡 DB에 PC1 생존 여부 기록
             }
+            
             if self.latest_system_status:
+                # 💡 [추가 기능 2] UI 상단 평균 사이클 타임 카드에 실시간 흐르는 시간 주입
+                self.latest_system_status['last_cycle_time'] = realtime_duration
+                
+                # PC1이 죽었을 경우 UI에 명시적으로 알림
+                if not pc1_is_online and not self.is_cycle_running:
+                    self.latest_system_status['phase'] = 'PC1 Disconnected'
+
                 updates['system_stats'] = self.latest_system_status
                 updates['robot_status/phase'] = self.latest_system_status.get('phase', 'Ready')
                 updates['robot_status/velocity'] = self.latest_system_status.get('tcp_vel', 0)
                 updates['robot_status/acceleration'] = self.latest_system_status.get('tcp_acc', 0)
+                
             db.reference().update(updates)
         except Exception as e:
             pass
 
     def system_status_callback(self, msg):
+        # 💡 [추가 기능 1] 컨트롤러 노드로부터 메시지가 올 때마다 생존 시간 갱신
+        self.last_pc1_heartbeat = time.time()
+
         new_phase = getattr(msg, 'phase', 'Ready')
         old_phase = self.latest_system_status.get('phase', 'Ready')
         new_count = getattr(msg, 'total_count', 0)
 
+        # 믹싱 단계 진입 시 최종 누적 무게 저장 로직 (유지)
         if new_phase == 'Mixing' and old_phase != 'Mixing':
-            self.final_accumulated_weight = self.base_accumulated_weight + self.latest_weight
+            self.final_accumulated_weight = self.last_display_weight
             self.get_logger().info(f"📌 [무게 확정] 믹싱 진입 전 최종 누적 무게 저장: {self.final_accumulated_weight:.2f}g")
 
         if getattr(self, 'is_first_msg', True):
@@ -225,7 +254,7 @@ class UserInterface(Node):
             "total_count": new_count,
             "success_count": getattr(msg, 'success_count', 0),
             "error_rate": round(getattr(msg, 'error_rate', 0.0), 2),
-            "last_cycle_time": round(getattr(msg, 'last_cycle_time', 0.0), 2)
+            # "last_cycle_time": round(getattr(msg, 'last_cycle_time', 0.0), 2) # 💡 위 실시간 로직에서 덮어쓰므로 주석 처리 또는 유지 무관
         }
         
     def save_experiment_history(self):
@@ -233,7 +262,7 @@ class UserInterface(Node):
             target_w = self.current_target_weight
             
             if self.recipe_failed_flag:
-                final_w = round(self.base_accumulated_weight + self.latest_weight, 2)
+                final_w = self.last_display_weight
             else:
                 final_w = round(self.final_accumulated_weight, 2)
                 
@@ -246,21 +275,36 @@ class UserInterface(Node):
                 'target_weight': target_w,
                 'final_weight': final_w,  
                 'success': not self.recipe_failed_flag,
-                'is_emergency': self.is_emergency_stopped, # 💡 [추가] DB에 긴급중단 여부 기록
+                'is_emergency': self.is_emergency_stopped,
                 'ss_error_g': ss_error_g,
                 'cycle_time': round(self.current_cycle_time, 2)
             }
             
             now = datetime.datetime.now()
             time_str = now.strftime('%Y%m%d_%H%M%S') 
-            safe_material = str(self.current_material).replace('/', '-').replace(' ', '_').replace('(', '').replace(')', '')
-            if not safe_material: safe_material = "Unknown"
-            custom_key = f"{time_str}_{safe_material}" 
+            
+            # 💡 [핵심 수정] 요청하신 포맷(260227_023222_recipe_water100_ethanol10_acetone10)으로 파싱
+            # 기존: Lab Recipe (에탄올10/아세톤10/물200) 형태의 문자열을 정규식으로 추출
+            custom_key = f"{time_str}_recipe_Unknown"
+            match = re.search(r'에탄올(\d+(\.\d+)?)/아세톤(\d+(\.\d+)?)/물(\d+(\.\d+)?)', self.current_material)
+            
+            if match:
+                water_amt = match.group(5)
+                ethanol_amt = match.group(1)
+                acetone_amt = match.group(3)
+                # 앞자리 연도를 2자리로 맞추기 위해 2026 -> 26 형태 활용
+                short_time_str = now.strftime('%y%m%d_%H%M%S')
+                custom_key = f"{short_time_str}_recipe_water{water_amt}_ethanol{ethanol_amt}_acetone{acetone_amt}"
+            else:
+                # 포맷이 안 맞을 경우 예비 처리
+                safe_material = str(self.current_material).replace('/', '-').replace(' ', '_').replace('(', '').replace(')', '')
+                if not safe_material: safe_material = "Unknown"
+                custom_key = f"{time_str}_{safe_material}" 
             
             db_ref = db.reference('experiment_history')
             db_ref.child(custom_key).set(history_data)
             
-            self.get_logger().info(f"💾 [DB 저장 성공] ID: {custom_key} | 결과무게: {final_w}g | 소요시간: {self.current_cycle_time:.2f}s | 판정: {'성공' if not self.recipe_failed_flag else '실패'}")
+            self.get_logger().info(f"💾 [DB 저장 성공] ID: {custom_key} | 결과무게: {final_w}g | 판정: {'긴급중단' if self.is_emergency_stopped else '완료'}")
         except Exception as e:
             self.get_logger().error(f"❌ DB 히스토리 저장 실패: {e}")
 
@@ -289,7 +333,7 @@ class UserInterface(Node):
                 'stop_threshold': round(getattr(msg, 'stop_threshold', 0.0), 2),
                 'p_d_ratio': round(getattr(msg, 'p_d_ratio', 0.0), 2),
                 'overshoot': round(getattr(msg, 'overshoot', 0.0), 2),
-                'rise_time': round(getattr(msg, 'rise_time', 0.0), 2),
+                'rise_time': round(getattr(msg, 'rise_time', 2), 2),
                 'settling_time': round(getattr(msg, 'settling_time', 0.0), 2),
                 'ss_error': round(getattr(msg, 'ss_error', 0.0), 2),
                 'final_settled_weight': round(getattr(msg, 'final_settled_weight', 0.0), 2)
@@ -305,6 +349,7 @@ class UserInterface(Node):
                 
             custom_key = f"{time_str}_{ms}_Metrics_{safe_material}"
 
+            # 💡 [기존 추가 요청 기능] control_metrics_history도 함께 저장
             db.reference('control_metrics_history').child(custom_key).set(metrics_data) 
             self.latest_system_status['max_tilt_step'] = round(getattr(msg, 'max_tilt_step', 0.0), 2)
             self.latest_system_status['stop_threshold'] = round(getattr(msg, 'stop_threshold', 0.0), 2)
@@ -315,6 +360,7 @@ class UserInterface(Node):
     def joint_callback(self, msg): pass
     
     def weight_callback(self, msg): 
+        # 로드셀이 중간에 0으로 떨어지든 말든, 측정한 값만 정직하게 갱신 (유지)
         self.latest_weight = float(msg.data)
 
 def main(args=None):

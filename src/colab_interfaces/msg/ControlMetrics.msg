@@ -8,3 +8,5 @@ float32 overshoot
 float32 rise_time
 float32 settling_time
 float32 ss_error
+float32 pour_speed
+float32 error_rate

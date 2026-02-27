@@ -25,9 +25,16 @@ setup(
     entry_points={
         'console_scripts': [
             'ui = colab_pkg.user_interface:main',
+            'ui2 = colab_pkg.user_interface_virtual:main',
             'test = colab_pkg.test_msg_ui:main',
             'pour = colab_pkg.task_pouring_ctrl_ver2:main',
             'scale = colab_pkg.scale_driver_ver2:main',
+            'noise = colab_pkg.noise_analyzer:main',
+            'mock = colab_pkg.mock_controller:main',
+            'mix = colab_pkg.task_mixing_copy:main',
+            'scale_lpf = colab_pkg.scale_driver_ver2_lpf:main',
+            'scale_alpf = colab_pkg.scale_driver_ver2_alpf:main',
+            'scale_kalman = colab_pkg.scale_driver_ver2_kalman:main',
         ],
     },
 )
